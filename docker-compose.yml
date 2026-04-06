@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: clingysocks
+      POSTGRES_PASSWORD: clingysocks
+      POSTGRES_DB: clingysocks_memory
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clingysocks"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./memory
+      dockerfile: Dockerfile
+    ports:
+      - "8100:8100"
+    env_file:
+      - ./memory/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: always
+    container_name: clingysocks-backend
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: always
+    container_name: clingysocks-frontend
+
+volumes:
+  pgdata:

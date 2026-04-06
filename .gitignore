@@ -1,0 +1,45 @@
+/letta
+/misc
+/backup/
+memory/backups/
+memory/logs/
+memory/data/
+memory/sync.py
+/frontend/node_modules
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Environment variables (Sensitive data!)
+.env
+.env.mcp
+frontend/.env
+serviceAccountKey.json
+chathistory/
+memory/backups/
+memory/logs/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+build/
+misc/
+
+# Secrets
+serviceAccountKey.json
+memory/serviceAccountKey.json
+*.json
+!package.json
+!tsconfig.json
+!mcp_config.json
+!mcp_config.example.json
+!external_agents.json

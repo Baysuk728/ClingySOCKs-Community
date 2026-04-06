@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0a0f1a" rx="64"/>
+  <g transform="translate(256, 256)">
+    <!-- Brain/Neural network icon -->
+    <circle cx="0" cy="-60" r="30" fill="none" stroke="#00f2ff" stroke-width="4"/>
+    <circle cx="-52" cy="30" r="30" fill="none" stroke="#00f2ff" stroke-width="4"/>
+    <circle cx="52" cy="30" r="30" fill="none" stroke="#00f2ff" stroke-width="4"/>
+    <!-- Connections -->
+    <line x1="0" y1="-30" x2="-38" y2="10" stroke="#00f2ff" stroke-width="3"/>
+    <line x1="0" y1="-30" x2="38" y2="10" stroke="#00f2ff" stroke-width="3"/>
+    <line x1="-22" y1="30" x2="22" y2="30" stroke="#00f2ff" stroke-width="3"/>
+    <!-- Center glow -->
+    <circle cx="0" cy="0" r="15" fill="#00f2ff" opacity="0.8"/>
+    <!-- Outer ring -->
+    <circle cx="0" cy="0" r="100" fill="none" stroke="#00f2ff" stroke-width="2" opacity="0.4"/>
+  </g>
+</svg>

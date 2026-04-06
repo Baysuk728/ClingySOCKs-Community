@@ -1,0 +1,14 @@
+[build]
+builder = "dockerfile"
+dockerfilePath = "memory/Dockerfile"
+watchPatterns = ["memory/**"]
+
+[deploy]
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 3
+
+[[services]]
+name = "clingysocks-api"
+internalPort = 8100
