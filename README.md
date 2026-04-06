@@ -4,6 +4,14 @@ Relational memory engine for AI agents.
 
 > **Disclaimer:** ClingySOCKs is an experimental research project exploring persistent memory for AI agents. It is **not** a mental health tool, therapeutic service, or substitute for human relationships. Use responsibly and at your own risk.
 
+## How It Works
+
+1. **Add your API keys** to `memory/.env` (Gemini, OpenAI, Anthropic, etc.)
+2. **Create an agent** — set up a persona with a name, model, and personality
+3. **Import a ChatGPT export** — feed in your conversation history for memory extraction
+4. **Run harvest** — the engine processes conversations and builds a relational memory graph
+5. **Start chatting** — your agent now remembers context across conversations
+
 ## Quick Start
 
 ### Backend (Memory Server)
