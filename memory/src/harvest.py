@@ -474,6 +474,15 @@ def _store_harvest_results(
     """Store all extracted data to PostgreSQL. Returns item count."""
     count = 0
 
+    def _safe_flush(section_name: str):
+        """Flush pending writes; rollback dirty state on error so later sections aren't affected."""
+        nonlocal count
+        try:
+            session.flush()
+        except Exception as e:
+            console.print(f"   ⚠️ Flush failed in {section_name}: {e}")
+            session.rollback()
+
     # --- Life Events ---
     for event_data in context_window.get_all_life_events():
         event_id = event_data.get("id", f"event-{count}")
@@ -601,7 +610,8 @@ def _store_harvest_results(
     # --- State Needs ---
     for state_data in context_window.get_all_state_observations():
         state_name = state_data.get("state", "")
-        if not state_name:
+        needs_text = state_data.get("what_helped") or state_data.get("needs") or ""
+        if not state_name or not needs_text:
             continue
         existing = (
             session.query(StateNeed)
@@ -612,8 +622,8 @@ def _store_harvest_results(
             need = StateNeed(
                 entity_id=entity_id,
                 state=state_name,
-                needs=state_data.get("what_helped", ""),
-                anti_needs=state_data.get("what_didnt_help"),
+                needs=needs_text,
+                anti_needs=state_data.get("what_didnt_help") or state_data.get("anti_needs"),
                 signals=state_data.get("signals"),
             )
             session.add(need)
@@ -643,6 +653,8 @@ def _store_harvest_results(
         session.add(ritual)
         count += 1
 
+    _safe_flush("state_needs+permissions+rituals")
+
     # --- Unresolved Threads ---
     for thread_data in context_window.get_all_unresolved_threads():
         thread = UnresolvedThread(
@@ -654,6 +666,8 @@ def _store_harvest_results(
         )
         session.add(thread)
         count += 1
+
+    _safe_flush("threads")
 
     # --- Narratives (from synthesis) ---
     # Archive old versions (is_current=False) instead of overwriting,

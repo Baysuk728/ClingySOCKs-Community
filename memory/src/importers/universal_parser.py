@@ -243,6 +243,41 @@ def parse_chatgpt(content: str) -> list[ParsedConversation]:
     return conversations
 
 
+def _extract_claude_text(msg: dict) -> str:
+    """
+    Extract text from a Claude export message.
+
+    Claude messages have a top-level `text` string AND a `content` array of
+    content blocks like [{"type": "text", "text": "..."}].  The top-level
+    `text` mirrors the content blocks but may be missing or empty for
+    non-text content (tool use, attachments).
+    """
+    # Prefer the top-level `text` field (simple string)
+    top_text = msg.get("text")
+    if isinstance(top_text, str) and top_text.strip():
+        return top_text
+
+    # Fall back to extracting from the `content` blocks array
+    content = msg.get("content")
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "")
+                if t:
+                    parts.append(t)
+            elif isinstance(block, str):
+                parts.append(block)
+        if parts:
+            return "\n".join(parts)
+
+    # Last resort: content might be a plain string
+    if isinstance(content, str):
+        return content
+
+    return ""
+
+
 def parse_claude(content: str) -> list[ParsedConversation]:
     """
     Parse Claude export format.
@@ -273,7 +308,7 @@ def parse_claude(content: str) -> list[ParsedConversation]:
                 continue
             
             role_raw = msg.get("sender") or msg.get("role") or "user"
-            text = msg.get("text") or msg.get("content") or ""
+            text = _extract_claude_text(msg)
             ts_str = msg.get("created_at") or msg.get("timestamp")
             
             if not text.strip():
