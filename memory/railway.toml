@@ -1,7 +1,6 @@
 [build]
 builder = "dockerfile"
-dockerfilePath = "memory/Dockerfile"
-watchPatterns = ["memory/**"]
+dockerfilePath = "Dockerfile"
 
 [deploy]
 healthcheckPath = "/health"

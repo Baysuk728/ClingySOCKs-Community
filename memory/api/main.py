@@ -112,16 +112,25 @@ async def lifespan(app: FastAPI):
         print("ℹ️  Heartbeat system disabled (community edition)")
 
     # ── Subconscious Daemon & Agent Scheduler ─────────
-    from src.services.subconscious_daemon import subconscious_daemon
-    from src.services.agent_scheduler import agent_scheduler
-    await subconscious_daemon.start()
-    await agent_scheduler.start()
+    try:
+        from src.services.subconscious_daemon import subconscious_daemon
+        from src.services.agent_scheduler import agent_scheduler
+        await subconscious_daemon.start()
+        await agent_scheduler.start()
+        print("🧠 Subconscious daemon & scheduler started")
+    except Exception as e:
+        print(f"⚠️  Failed to start daemon/scheduler (non-fatal): {e}")
 
     yield
 
     print("👋 Shutting down")
-    await agent_scheduler.stop()
-    await subconscious_daemon.stop()
+    try:
+        from src.services.agent_scheduler import agent_scheduler
+        from src.services.subconscious_daemon import subconscious_daemon
+        await agent_scheduler.stop()
+        await subconscious_daemon.stop()
+    except Exception:
+        pass
     if heartbeat_mgr:
         await heartbeat_mgr.stop_all()
     if mcp_manager:
@@ -222,8 +231,11 @@ app.include_router(group_chat_router, prefix="/chat/group", tags=["Group Chat"])
 app.include_router(group_mgmt_router, prefix="/groups", tags=["Group Management"])
 app.include_router(public_media_router, prefix="/media", tags=["Public Media"])
 # ── Enhanced Memory (orient, timeline, surfacing, etc.) ──
-from api.routes.enhanced_memory import router as enhanced_memory_router
-app.include_router(enhanced_memory_router, prefix="/enhanced", tags=["Enhanced Memory"])
+try:
+    from api.routes.enhanced_memory import router as enhanced_memory_router
+    app.include_router(enhanced_memory_router, prefix="/enhanced", tags=["Enhanced Memory"])
+except Exception as e:
+    print(f"⚠️  Enhanced memory routes not loaded: {e}")
 # ── External Agent Integration (OpenClaw) ──────────────
 from api.routes.openclaw import router as openclaw_router
 app.include_router(openclaw_router, prefix="/openclaw", tags=["OpenClaw"])
