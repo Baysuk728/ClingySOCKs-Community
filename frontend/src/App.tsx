@@ -7,6 +7,7 @@ import { ContextBuilder } from './components/ContextBuilder';
 import { GraphVisualizer } from './components/GraphVisualizer';
 import { Settings } from './components/Settings';
 import { UserProfile } from './components/UserProfile';
+import { SubconsciousDashboard } from './components/SubconsciousDashboard';
 import { LoginScreen } from './components/LoginScreen';
 import { useAuth } from './components/AuthProvider';
 import { Agent, ChatSession, Message, Memory, ViewMode, ApiKeyConfig } from './types';
@@ -441,7 +442,12 @@ const App: React.FC = () => {
       case 'graph':
         return (
           <GraphVisualizer agents={agents} />
-        );      case 'settings':
+        );
+      case 'subconscious':
+        return (
+          <SubconsciousDashboard agents={agents} />
+        );
+      case 'settings':
         return (
           <Settings />
         );

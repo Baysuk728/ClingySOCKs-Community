@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, Users, Brain, Settings, Download, UserCircle2, Layers, GitBranch } from 'lucide-react';
+import { MessageSquare, Users, Brain, Settings, Download, UserCircle2, Layers, GitBranch, Sparkles } from 'lucide-react';
 import { ViewMode } from '../types';
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentView, onViewChange }) =
     { id: 'memory' as ViewMode, icon: Brain, label: 'Memory' },
     { id: 'context' as ViewMode, icon: Layers, label: 'Context' },
     { id: 'graph' as ViewMode, icon: GitBranch, label: 'Graph' },
+    { id: 'subconscious' as ViewMode, icon: Sparkles, label: 'Subconscious' },
     { id: 'profile' as ViewMode, icon: UserCircle2, label: 'Profile' },
     { id: 'settings' as ViewMode, icon: Settings, label: 'Settings' },
   ];
