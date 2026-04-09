@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { AVAILABLE_MODELS } from '../constants';
+import { getApiUrlSync } from '../services/apiConfig';
 
-const API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
+const API_URL = getApiUrlSync();
 const CACHE_KEY = 'system_config_v3';
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 

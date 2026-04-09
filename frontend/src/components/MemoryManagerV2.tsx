@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Agent } from '../types';
+import { getApiUrlSync, API_KEY } from '../services/apiConfig';
 import {
     getWarmMemory,
     getEntityMeta,
@@ -216,8 +217,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
         setHarvestAbortController(abortController);
         setHarvestingConvs(true);
 
-        const apiUrl = (import.meta as any).env?.VITE_MEMORY_API_URL || 'http://localhost:8000';
-        const apiKey = (import.meta as any).env?.VITE_MEMORY_API_KEY || '';
+        const apiUrl = getApiUrlSync();
 
         try {
             const res = await fetch(`${apiUrl}/harvest/conversations`, {
@@ -225,7 +225,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${getToken()}`,
-                    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+                    ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
                 },
                 body: JSON.stringify({
                     conversationIds: convIds,
@@ -461,8 +461,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
     // Manual Trigger Handlers
     const handleUserHarvest = async (conversationId: string) => {
         setUserHarvestingConvId(conversationId);
-        const apiUrl = (import.meta as any).env?.VITE_MEMORY_API_URL || 'http://localhost:8000';
-        const apiKey = (import.meta as any).env?.VITE_MEMORY_API_KEY || '';
+        const apiUrl = getApiUrlSync();
         try {
             const user = getCurrentUser();
             if (!user) throw new Error("Not authenticated");
@@ -472,7 +471,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${getToken()}`,
-                    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+                    ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
                 },
                 body: JSON.stringify({ userId: user.uid, conversationId }),
             });
@@ -490,8 +489,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
     const handleBridge = async () => {
         if (!selectedEntity) return;
         setIsBridging(true);
-        const apiUrl = (import.meta as any).env?.VITE_MEMORY_API_URL || 'http://localhost:8000';
-        const apiKey = (import.meta as any).env?.VITE_MEMORY_API_KEY || '';
+        const apiUrl = getApiUrlSync();
         try {
             const user = getCurrentUser();
             if (!user) throw new Error("Not authenticated");
@@ -501,7 +499,7 @@ export const MemoryManagerV2: React.FC<MemoryManagerV2Props> = ({ agents, curren
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${getToken()}`,
-                    ...(apiKey ? { 'X-API-Key': apiKey } : {}),
+                    ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),
                 },
                 body: JSON.stringify({
                     userId: user.uid,

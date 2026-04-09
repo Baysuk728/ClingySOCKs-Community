@@ -4,7 +4,9 @@
  * Calls the FastAPI /vault/* endpoints for key and database management.
  */
 
-const API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
+import { getApiUrlSync } from './apiConfig';
+
+const API_URL = getApiUrlSync();
 const API_KEY = import.meta.env.VITE_MEMORY_API_KEY || '';
 
 const getHeaders = (json = true): Record<string, string> => ({

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { Agent, ChatSession, Message, Memory, ApiKeyConfig } from '../types';
-import { Send, Plus, MoreVertical, Bot, User, Trash2, Cpu, Mic, Brain, History, ChevronDown, ChevronRight, Search, Archive, Menu, X, Download, Volume2, PanelLeftClose, PanelLeftOpen, Upload, BarChart3, Copy, Check, Square, Pause, Play, Paperclip } from 'lucide-react';
+import { Send, Plus, MoreVertical, Bot, User, Trash2, Cpu, Mic, Brain, History, ChevronDown, ChevronRight, Search, Archive, Menu, X, Download, Volume2, PanelLeftClose, PanelLeftOpen, Upload, BarChart3, Copy, Check, Square, Pause, Play, Paperclip, AlertTriangle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { generateSpeech } from '../services/api'; // kept for TTS
 import { chatApi, ChatMessage as ApiChatMessage } from '../services/chatApi'; // New Chat API
@@ -9,9 +9,9 @@ import { HarvestStatusIcon, HarvestState } from './HarvestStatusIcon';
 import { VoiceMode } from './VoiceMode';
 
 import { useAuth } from './AuthProvider';
+import { getApiUrlSync, API_KEY } from '../services/apiConfig';
 
-const API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
-const API_KEY = import.meta.env.VITE_MEMORY_API_KEY || '';
+const API_URL = getApiUrlSync();
 
 interface ToolMediaAttachment {
     kind: 'image' | 'audio';
@@ -278,6 +278,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const [pausedMessageId, setPausedMessageId] = useState<string | null>(null);
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
+    // Error banner state
+    const [chatError, setChatError] = useState<string | null>(null);
+
     // Abort controller for stopping streaming
     const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -408,7 +411,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
         const agentIds = agents.filter(a => participants.includes(a.id)).map(a => a.id);
         if (agentIds.length === 0) return;
 
-        const MEMORY_API = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
+        const MEMORY_API = getApiUrlSync();
         const wsUrl = MEMORY_API.replace('http', 'ws');
         const sockets: WebSocket[] = [];
 
@@ -671,6 +674,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                 setIsStreaming(true);
                 setStreamingContent('');
                 setStreamThinking('');
+                setChatError(null);
                 setCurrentStreamingAgentId(agent.id);
 
                 let fullContent = '';
@@ -721,6 +725,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 break;
                             case 'error':
                                 console.error('Stream error event:', event.error);
+                                setChatError(event.error || 'An unknown error occurred');
                                 setStreamThinking(prev => prev + `\n❌ [Error: ${event.error}]`);
                                 break;
                             case 'content_replace':
@@ -749,7 +754,9 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     },
                     (error) => {
                         console.error('Stream error:', error);
-                        setStreamThinking(prev => prev + `\n[Error: ${error}]`);
+                        const msg = error?.message || String(error) || 'Connection failed';
+                        setChatError(msg);
+                        setStreamThinking(prev => prev + `\n[Error: ${msg}]`);
                     },
                     {
                         user_id: authUser?.uid, // Pass user ID for User Profile lookup
@@ -1138,6 +1145,16 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
 
                         {/* Input */}
                         <div className="p-2 md:p-4 bg-nexus-900 border-t border-white/5">
+                            {/* Error banner */}
+                            {chatError && (
+                                <div className="max-w-4xl mx-auto mb-2 px-3 py-2 bg-red-500/15 border border-red-500/30 rounded-lg flex items-start gap-2">
+                                    <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+                                    <span className="text-sm text-red-300 flex-1">{chatError}</span>
+                                    <button onClick={() => setChatError(null)} className="text-red-400 hover:text-red-300 shrink-0">
+                                        <X className="w-4 h-4" />
+                                    </button>
+                                </div>
+                            )}
                             {/* File attachment previews */}
                             {pendingPreviews.length > 0 && (
                                 <div className="max-w-4xl mx-auto mb-2 flex flex-wrap gap-2 px-2">

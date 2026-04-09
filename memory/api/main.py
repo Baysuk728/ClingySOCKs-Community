@@ -135,7 +135,7 @@ ALLOWED_ORIGINS = os.getenv(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -235,6 +235,56 @@ async def websocket_endpoint(websocket: WebSocket, entity_id: str):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "clingysocks-memory-api"}
+
+
+@app.get("/status")
+async def status():
+    """Return feature readiness based on configured API keys and services.
+    
+    The frontend uses this to show users which features are available
+    and what they need to configure to unlock more.
+    """
+    from src.model_registry import get_configured_providers
+    from src.config import EMBEDDINGS_ENABLED, NARRATIVE_MODEL, EXTRACTION_MODEL, SYNTHESIS_MODEL
+    from src.db.session import _engine as current_engine
+
+    configured = get_configured_providers()
+    has_chat_provider = any(p in configured for p in ("gemini", "openai", "claude", "grok", "openrouter"))
+    has_gemini = "gemini" in configured
+    has_tts = "elevenlabs" in configured or bool(os.getenv("GOOGLE_TTS_API_KEY")) or bool(os.getenv("LOCAL_TTS_URL"))
+    has_openai_embed = "openai" in configured
+
+    features = {
+        "database": current_engine is not None,
+        "chat": has_chat_provider,
+        "harvest": has_chat_provider,
+        "voice_live": has_gemini,
+        "tts": has_tts,
+        "embeddings": EMBEDDINGS_ENABLED and has_openai_embed,
+    }
+
+    hints = []
+    if not features["database"]:
+        hints.append("Set DATABASE_URL to connect to PostgreSQL with pgvector.")
+    if not features["chat"]:
+        hints.append("Add at least one LLM API key (OPENROUTER_API_KEY is the easiest) to enable chat and harvest.")
+    if not features["voice_live"]:
+        hints.append("Voice mode requires GEMINI_API_KEY for real-time audio.")
+    if not features["tts"]:
+        hints.append("For text-to-speech, add ELEVENLABS_API_KEY, GOOGLE_TTS_API_KEY, or LOCAL_TTS_URL.")
+    if EMBEDDINGS_ENABLED and not has_openai_embed:
+        hints.append("Embeddings are enabled but OPENAI_API_KEY is missing (needed for text-embedding-3-small).")
+
+    return {
+        "features": features,
+        "configured_providers": configured,
+        "pipeline_models": {
+            "narrative": NARRATIVE_MODEL,
+            "extraction": EXTRACTION_MODEL,
+            "synthesis": SYNTHESIS_MODEL,
+        },
+        "hints": hints,
+    }
 
 
 @app.get("/info")

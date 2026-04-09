@@ -5,8 +5,9 @@
 import { getToken } from '../auth';
 import { ModelProvider } from "../types";
 
-const API_URL = (import.meta as any).env?.VITE_MEMORY_API_URL || 'http://localhost:8000';
-const API_KEY = (import.meta as any).env?.VITE_MEMORY_API_KEY || '';
+import { getApiUrlSync, API_KEY } from './apiConfig';
+
+const API_URL = getApiUrlSync();
 
 async function apiCall<T = any>(endpoint: string, method: string = 'POST', body?: any): Promise<T> {
     const res = await fetch(`${API_URL}${endpoint}`, {

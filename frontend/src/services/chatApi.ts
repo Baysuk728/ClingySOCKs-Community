@@ -1,7 +1,7 @@
 
+import { getApiUrlSync, API_KEY } from './apiConfig';
 
-const API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
-const API_KEY = import.meta.env.VITE_MEMORY_API_KEY || '';
+const API_URL = getApiUrlSync();
 
 const getHeaders = () => ({
     'Content-Type': 'application/json',

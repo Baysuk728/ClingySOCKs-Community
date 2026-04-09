@@ -27,6 +27,14 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Copy nginx config for SPA client-side routing
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Create entrypoint script that injects VITE_MEMORY_API_URL at runtime
+RUN printf '#!/bin/sh\n\
+URL="${VITE_MEMORY_API_URL:-}"\n\
+if [ -n "$URL" ]; then\n\
+  sed -i "s|RUNTIME_API_URL_PLACEHOLDER|$URL|g" /etc/nginx/conf.d/default.conf\n\
+fi\n\
+exec nginx -g "daemon off;"\n' > /docker-entrypoint-runtime.sh && chmod +x /docker-entrypoint-runtime.sh
+
 EXPOSE 80
 
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["/docker-entrypoint-runtime.sh"]
