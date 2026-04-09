@@ -302,6 +302,116 @@ SEND_MESSAGE_SCHEMA = {
 }
 
 
+# ============================================================================
+# SURFACE MEMORIES (3-pool: relevance + novelty + edge)
+# ============================================================================
+
+SURFACE_MEMORIES_SCHEMA = {
+    "name": "surface_memories",
+    "description": (
+        "Search memories using 3 parallel pools: relevance (semantic match), "
+        "novelty (forgotten gems), and edge (graph neighbors). Returns richer "
+        "results than a simple search by combining different retrieval strategies.\n\n"
+        "WHEN TO USE:\n"
+        "- User asks a question that benefits from diverse recall\n"
+        "- You want to surface forgotten or tangentially related memories\n"
+        "- Building rich context for a complex topic"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "What to search for across all memory pools.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Total results across all pools (default: 15).",
+                "default": 15,
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
+# ============================================================================
+# TIMELINE TRACE (chronological topic history)
+# ============================================================================
+
+TIMELINE_SCHEMA = {
+    "name": "trace_timeline",
+    "description": (
+        "Trace a topic chronologically through all memory types. "
+        "Returns an ordered timeline of every memory, fact, event, and "
+        "thread related to the topic.\n\n"
+        "WHEN TO USE:\n"
+        "- User asks 'what's the history of X?'\n"
+        "- You need to understand how something evolved over time\n"
+        "- Reviewing the arc of a relationship, project, or emotional pattern"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "The topic to trace through time.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum events to return (default: 20).",
+                "default": 20,
+            },
+        },
+        "required": ["topic"],
+    },
+}
+
+
+# ============================================================================
+# PERSISTENT THREADS (cross-session intentions)
+# ============================================================================
+
+MANAGE_THREAD_SCHEMA = {
+    "name": "manage_thread",
+    "description": (
+        "Create, update, or resolve persistent threads — ongoing concerns, "
+        "intentions, and follow-ups that persist across sessions.\n\n"
+        "WHEN TO USE:\n"
+        "- You notice something you want to follow up on later\n"
+        "- User mentions a concern that needs tracking\n"
+        "- Resolving or updating a previously noted intention\n\n"
+        "ACTIONS:\n"
+        "- create: Start a new thread\n"
+        "- update: Add a note (prefix content with '+' to append)\n"
+        "- resolve: Mark as resolved"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["create", "update", "resolve"],
+                "description": "What to do with the thread.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Thread title (required for create).",
+            },
+            "content": {
+                "type": "string",
+                "description": "Thread content or update note. Prefix with '+' to append.",
+            },
+            "thread_id": {
+                "type": "integer",
+                "description": "Thread ID (required for update/resolve).",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
+
 
 
 
@@ -398,6 +508,9 @@ def get_tool_schemas() -> list[dict]:
         {"type": "function", "function": MEMORY_QUERY_SCHEMA},
         {"type": "function", "function": WRITE_MEMORY_SCHEMA},
         {"type": "function", "function": SEND_MESSAGE_SCHEMA},
+        {"type": "function", "function": SURFACE_MEMORIES_SCHEMA},
+        {"type": "function", "function": TIMELINE_SCHEMA},
+        {"type": "function", "function": MANAGE_THREAD_SCHEMA},
         {"type": "function", "function": GRAPH_TRAVERSE_SCHEMA},
     ]
 
@@ -421,4 +534,7 @@ ALL_TOOL_SCHEMAS = [
     {"type": "function", "function": WRITE_MEMORY_SCHEMA},
     {"type": "function", "function": GRAPH_TRAVERSE_SCHEMA},
     {"type": "function", "function": SEND_MESSAGE_SCHEMA},
+    {"type": "function", "function": SURFACE_MEMORIES_SCHEMA},
+    {"type": "function", "function": TIMELINE_SCHEMA},
+    {"type": "function", "function": MANAGE_THREAD_SCHEMA},
 ]
