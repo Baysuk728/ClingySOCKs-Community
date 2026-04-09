@@ -149,13 +149,18 @@ _default_origins = "http://localhost:5173,http://localhost:3000,http://localhost
 _cors_env = os.getenv("CORS_ORIGINS", "")
 ALLOWED_ORIGINS = [o.strip() for o in (_cors_env or _default_origins).split(",") if o.strip()]
 
-# Auto-add Railway frontend if on Railway and not explicitly configured
-if os.getenv("RAILWAY_ENVIRONMENT") and not _cors_env:
+# Auto-detect Railway: check multiple env vars Railway might set
+_on_railway = any(os.getenv(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_NAME", "RAILWAY_STATIC_URL"))
+if _on_railway and not _cors_env:
     ALLOWED_ORIGINS.append("https://clingysocks-frontend-production.up.railway.app")
 
+print(f"🌐 CORS allowed origins: {ALLOWED_ORIGINS}")
+
+# Use regex to also allow any Railway subdomain as a fallback
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://.*\.up\.railway\.app" if not _cors_env else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
