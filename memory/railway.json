@@ -21,6 +21,7 @@
         "tcpProxies": {}
       },
       "variables": {
+        "PORT": "8000", 
         "DATABASE_URL": "${{postgres.DATABASE_URL}}",
         "EDITION": "community",
         "AUTH_PROVIDER": "local",
@@ -73,6 +74,7 @@
         "tcpProxies": {}
       },
       "variables": {
+        "PORT": "80",
         "VITE_MEMORY_API_URL": "https://${{backend.RAILWAY_PUBLIC_DOMAIN}}"
       }
     },
