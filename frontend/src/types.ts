@@ -68,5 +68,5 @@ export interface Memory {
   status: 'processing' | 'indexed' | 'error';
 }
 
-export type ViewMode = 'chat' | 'personas' | 'memory' | 'context' | 'graph' | 'tasks' | 'files' | 'settings' | 'profile';
+export type ViewMode = 'chat' | 'personas' | 'memory' | 'context' | 'graph' | 'subconscious' | 'tasks' | 'files' | 'settings' | 'profile';
 
