@@ -5,6 +5,15 @@
             "args": [
                 "./McpServers/FileSystemMCP.py"
             ]
+        },
+        "MemoryMCP": {
+            "command": "python",
+            "args": [
+                "-m", "memory.McpServers.MemoryMCP"
+            ],
+            "env": {
+                "MCP_DEFAULT_ENTITY_ID": ""
+            }
         }
     }
 }

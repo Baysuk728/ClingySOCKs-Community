@@ -111,9 +111,17 @@ async def lifespan(app: FastAPI):
     else:
         print("ℹ️  Heartbeat system disabled (community edition)")
 
+    # ── Subconscious Daemon & Agent Scheduler ─────────
+    from src.services.subconscious_daemon import subconscious_daemon
+    from src.services.agent_scheduler import agent_scheduler
+    await subconscious_daemon.start()
+    await agent_scheduler.start()
+
     yield
 
     print("👋 Shutting down")
+    await agent_scheduler.stop()
+    await subconscious_daemon.stop()
     if heartbeat_mgr:
         await heartbeat_mgr.stop_all()
     if mcp_manager:
@@ -210,6 +218,9 @@ if has_feature(Feature.AGENT_TASKS):
 app.include_router(group_chat_router, prefix="/chat/group", tags=["Group Chat"])
 app.include_router(group_mgmt_router, prefix="/groups", tags=["Group Management"])
 app.include_router(public_media_router, prefix="/media", tags=["Public Media"])
+# ── Enhanced Memory (orient, timeline, surfacing, etc.) ──
+from api.routes.enhanced_memory import router as enhanced_memory_router
+app.include_router(enhanced_memory_router, prefix="/enhanced", tags=["Enhanced Memory"])
 # ── External Agent Integration (OpenClaw) ──────────────
 from api.routes.openclaw import router as openclaw_router
 app.include_router(openclaw_router, prefix="/openclaw", tags=["OpenClaw"])

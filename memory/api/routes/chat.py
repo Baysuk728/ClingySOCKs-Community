@@ -252,6 +252,25 @@ async def execute_tool_call(entity_id: str, tool_name: str, args: dict) -> str:
         elif tool_name == "delegate_task":
             from src.tools.delegate import delegate_task as _delegate
             result = await _delegate(source_entity_id=entity_id, **args)
+        elif tool_name == "surface_memories":
+            from src.services.memory_surfacing import surface_memories as _surface
+            result = await _surface(entity_id, **args)
+        elif tool_name == "trace_timeline":
+            from src.services.timeline import trace_timeline as _trace
+            result = await _trace(entity_id, **args)
+        elif tool_name == "manage_thread":
+            from src.services.persistent_threads import (
+                create_thread, update_thread, resolve_thread,
+            )
+            action = args.pop("action", "create")
+            if action == "create":
+                result = create_thread(entity_id, title=args.get("title", ""), content=args.get("content", ""))
+            elif action == "update":
+                result = update_thread(entity_id, thread_id=args.get("thread_id", 0), content=args.get("content"), title=args.get("title"))
+            elif action == "resolve":
+                result = resolve_thread(entity_id, thread_id=args.get("thread_id", 0), resolution_note=args.get("content", ""))
+            else:
+                result = {"error": f"Unknown thread action: {action}"}
         else:
             return json.dumps({"error": f"Unknown tool: {tool_name}"})
 
