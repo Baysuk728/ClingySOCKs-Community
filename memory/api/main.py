@@ -136,10 +136,13 @@ app = FastAPI(
 )
 
 # CORS
-ALLOWED_ORIGINS = os.getenv(
-    "CORS_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:5678",
-).split(",")
+_default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:5678"
+_cors_env = os.getenv("CORS_ORIGINS", "")
+ALLOWED_ORIGINS = [o.strip() for o in (_cors_env or _default_origins).split(",") if o.strip()]
+
+# Auto-add Railway frontend if on Railway and not explicitly configured
+if os.getenv("RAILWAY_ENVIRONMENT") and not _cors_env:
+    ALLOWED_ORIGINS.append("https://clingysocks-frontend-production.up.railway.app")
 
 app.add_middleware(
     CORSMiddleware,
