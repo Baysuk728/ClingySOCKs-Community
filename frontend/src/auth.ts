@@ -1,9 +1,9 @@
 /**
  * Local Auth — REST API-backed authentication for ClingySOCKs.
  */
+import { getApiUrlSync, API_KEY } from './services/apiConfig';
 
-const API_URL = (import.meta as any).env?.VITE_MEMORY_API_URL || 'http://localhost:8100';
-const API_KEY = (import.meta as any).env?.VITE_MEMORY_API_KEY || '';
+const API_URL = getApiUrlSync();
 
 // ── User type ──
 

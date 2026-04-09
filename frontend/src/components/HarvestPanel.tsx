@@ -4,6 +4,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { auth } from '../auth';
+import { getApiUrlSync, API_KEY } from '../services/apiConfig';
 import {
     Zap,
     RefreshCw,
@@ -52,8 +53,7 @@ export const HarvestPanel: React.FC = () => {
         loadLogs();
     }, []);
 
-    const MEMORY_API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
-    const API_KEY = import.meta.env.VITE_MEMORY_API_KEY || '';
+    const MEMORY_API_URL = getApiUrlSync();
     const getHeaders = (json = true): Record<string, string> => ({
         ...(json ? { 'Content-Type': 'application/json' } : {}),
         ...(API_KEY ? { 'X-API-Key': API_KEY } : {}),

@@ -25,6 +25,32 @@ from src.db.models import Message, Conversation, Entity
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
+
+def _friendly_error(exc: Exception) -> str:
+    """Convert raw LLM/provider exceptions into user-friendly messages."""
+    msg = str(exc).lower()
+    raw = str(exc)
+
+    if "authenticationerror" in msg or "invalid api key" in msg or "api key not valid" in msg:
+        return "API key is invalid or expired. Check your API keys in Settings."
+    if "permission" in msg and "denied" in msg:
+        return "API key doesn't have permission for this model. Check your provider dashboard."
+    if "rate limit" in msg or "ratelimit" in msg or "429" in msg:
+        return "Rate limit exceeded. Wait a moment and try again, or switch to a different model."
+    if "quota" in msg or "insufficient_quota" in msg or "billing" in msg:
+        return "API quota exceeded or billing issue. Check your provider account."
+    if "model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg):
+        return f"Model not available. Try selecting a different model in Settings. ({raw[:120]})"
+    if "timeout" in msg or "timed out" in msg:
+        return "Request timed out. The model may be overloaded — try again or switch models."
+    if "connection" in msg or "connect" in msg:
+        return "Could not connect to the LLM provider. Check your internet connection and API keys."
+    if "context_length" in msg or "too many tokens" in msg or "maximum context" in msg:
+        return "Message too long for this model's context window. Try a shorter message or clear chat history."
+    # Fallback: truncate but keep it somewhat useful
+    return f"Something went wrong: {raw[:200]}"
+
+
 def _save_message_to_db(entity_id: str, chat_id: str, sender_id: str, content: str, user_id: str = "unknown", tool_calls=None, tool_results=None, force_id=None):
     if not chat_id:
         return
@@ -564,7 +590,7 @@ async def chat(entity_id: str, req: ChatRequest):
         print(f"❌ CHAT ENDPOINT CRITICAL ERROR: {e}")
         traceback.print_exc()
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"Critical Backend Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=_friendly_error(e))
 
 # ─── Streaming Response (SSE) ────────────────────────
 
@@ -961,7 +987,7 @@ def _stream_response(entity_id: str, chat_id: str, kwargs: dict, model: str, too
             print(f"❌ STREAM ERROR: {e}")
             import traceback
             traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'error': _friendly_error(e)})}\n\n"
 
     return StreamingResponse(
         generate(),

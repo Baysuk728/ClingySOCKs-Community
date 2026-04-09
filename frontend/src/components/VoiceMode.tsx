@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Mic, MicOff, Phone, PhoneOff, Volume2, ChevronDown } from 'lucide-react';
 import { VoiceModeSession, AudioProcessor, MicrophoneCapture } from '../services/voiceModeApi';
+import { getApiUrlSync } from '../services/apiConfig';
 
 interface VoiceModeProps {
     entityId: string;
@@ -69,7 +70,7 @@ export const VoiceMode: React.FC<VoiceModeProps> = ({
         const fetchVoices = async () => {
             try {
                 // Ensure API_URL has no trailing slash and build url
-                const baseUrl = (window as any).API_URL || import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
+                const baseUrl = getApiUrlSync();
                 const res = await fetch(`${baseUrl}/voice/voices`);
                 if (res.ok) {
                     const data = await res.json();

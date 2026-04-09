@@ -1,9 +1,9 @@
 import { Agent, Message, ApiKeyConfig } from "../types";
 import { auth } from "../auth";
+import { getApiUrlSync, API_KEY } from './apiConfig';
 
-// Memory API base URL (same as chatApi.ts)
-const MEMORY_API_URL = import.meta.env.VITE_MEMORY_API_URL || 'http://localhost:8100';
-const API_KEY = import.meta.env.VITE_MEMORY_API_KEY || '';
+// Memory API base URL (resolved from build-time env or runtime /config.json)
+const MEMORY_API_URL = getApiUrlSync();
 
 const getHeaders = (json = false): Record<string, string> => ({
   ...(json ? { 'Content-Type': 'application/json' } : {}),

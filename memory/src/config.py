@@ -21,8 +21,19 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 
 # --- Model Configuration ---
 # Defaults come from the centralised model_registry; override via env vars.
-from src.model_registry import get_default_model as _default_model
-_DEFAULT_LLM = _default_model("gemini")
+from src.model_registry import get_default_model as _default_model, get_configured_providers as _configured_providers
+
+def _resolve_default_llm() -> str:
+    """Pick the best default LLM based on what API keys are configured.
+    Priority: env override > gemini > openai > claude > grok > openrouter > fallback."""
+    configured = _configured_providers()
+    # Ordered preference — direct providers first, then aggregators
+    for provider in ("gemini", "openai", "claude", "grok", "openrouter"):
+        if provider in configured:
+            return _default_model(provider)
+    return _default_model("gemini")  # absolute fallback
+
+_DEFAULT_LLM = _resolve_default_llm()
 NARRATIVE_MODEL = os.getenv("NARRATIVE_MODEL", _DEFAULT_LLM)
 EXTRACTION_MODEL = os.getenv("EXTRACTION_MODEL", _DEFAULT_LLM)
 SYNTHESIS_MODEL = os.getenv("SYNTHESIS_MODEL", _DEFAULT_LLM)
