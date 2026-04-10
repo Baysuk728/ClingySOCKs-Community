@@ -100,8 +100,26 @@ npm run build   # Production build
 
 1. Connect your GitHub repository to Railway
 2. Add a **PostgreSQL** service with pgvector
-3. Set environment variables from `.env.example`
-4. Deploy — Railway uses `railway.toml` automatically
+3. Create two services: **backend** (from `memory/`) and **frontend** (from `frontend/`)
+4. Set environment variables on the **backend** service (from `.env.example`)
+5. Deploy — Railway uses `railway.toml` automatically
+
+### Railway Environment Variables
+
+On the **backend** service, set:
+```
+CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
+VITE_MEMORY_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
+```
+
+> **Note**: Replace `frontend` and `backend` with your actual Railway service names.
+> The `${{service_name.VARIABLE}}` syntax is Railway's variable reference format.
+> The backend auto-detects Railway and allows any `*.up.railway.app` origin as a fallback.
+
+On the **frontend** service, set:
+```
+VITE_MEMORY_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
+```
 
 ## Database Setup
 

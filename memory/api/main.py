@@ -144,23 +144,27 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — generic configuration that works for any deployment
 _default_origins = "http://localhost:5173,http://localhost:3000,http://localhost:3001,http://localhost:5678"
-_cors_env = os.getenv("CORS_ORIGINS", "")
+# Support both CORS_ORIGINS (plural) and CORS_ORIGIN (singular) for convenience
+_cors_env = os.getenv("CORS_ORIGINS", "") or os.getenv("CORS_ORIGIN", "")
 ALLOWED_ORIGINS = [o.strip() for o in (_cors_env or _default_origins).split(",") if o.strip()]
 
-# Auto-detect Railway: check multiple env vars Railway might set
-_on_railway = any(os.getenv(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_NAME", "RAILWAY_STATIC_URL"))
-if _on_railway and not _cors_env:
-    ALLOWED_ORIGINS.append("https://clingysocks-frontend-production.up.railway.app")
+# Auto-detect Railway deployment
+_on_railway = any(os.getenv(k) for k in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_NAME"))
+
+# Build regex pattern for cloud platform subdomains (always active when detected)
+# This ensures CORS works even if the CORS_ORIGINS variable doesn't resolve correctly
+_origin_regex = r"https://.*\.up\.railway\.app" if _on_railway else None
 
 print(f"🌐 CORS allowed origins: {ALLOWED_ORIGINS}")
+if _origin_regex:
+    print(f"🌐 CORS origin regex (Railway): {_origin_regex}")
 
-# Use regex to also allow any Railway subdomain as a fallback
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.up\.railway\.app" if _on_railway else None,
+    allow_origin_regex=_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
