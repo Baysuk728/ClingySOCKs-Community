@@ -27,8 +27,10 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Copy nginx config for SPA client-side routing
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Create entrypoint script that injects VITE_MEMORY_API_URL at runtime
+# Create entrypoint script that injects PORT and VITE_MEMORY_API_URL at runtime
 RUN printf '#!/bin/sh\n\
+PORT="${PORT:-80}"\n\
+sed -i "s|NGINX_PORT_PLACEHOLDER|$PORT|g" /etc/nginx/conf.d/default.conf\n\
 URL="${VITE_MEMORY_API_URL:-}"\n\
 if [ -n "$URL" ]; then\n\
   sed -i "s|RUNTIME_API_URL_PLACEHOLDER|$URL|g" /etc/nginx/conf.d/default.conf\n\
