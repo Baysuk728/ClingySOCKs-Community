@@ -3,12 +3,17 @@
  *
  * Priority:
  *  1. Vite build-time env var  VITE_MEMORY_API_URL  (works for local dev & docker --build-arg)
- *  2. Runtime /config.json     (injected by nginx for Railway / dynamic deploys)
+ *  2. Synchronous window.__RUNTIME_CONFIG__  (injected by inline script in index.html)
  *  3. Fallback                 http://localhost:8100
  */
 
+declare global {
+    interface Window {
+        __RUNTIME_CONFIG__?: { VITE_MEMORY_API_URL?: string };
+    }
+}
+
 let _cachedUrl: string | null = null;
-let _fetchPromise: Promise<string> | null = null;
 
 function buildTimeUrl(): string {
     try {
@@ -18,50 +23,19 @@ function buildTimeUrl(): string {
     }
 }
 
-async function fetchRuntimeConfig(): Promise<string> {
+function runtimeUrl(): string {
     try {
-        const resp = await fetch('/config.json', { cache: 'no-store' });
-        if (resp.ok) {
-            const data = await resp.json();
-            const url = data?.VITE_MEMORY_API_URL;
-            // Ignore the placeholder value (means nginx didn't substitute)
-            if (url && url !== 'RUNTIME_API_URL_PLACEHOLDER') {
-                return url.replace(/\/+$/, ''); // strip trailing slash
-            }
+        const url = window.__RUNTIME_CONFIG__?.VITE_MEMORY_API_URL;
+        if (url && url !== 'RUNTIME_API_URL_PLACEHOLDER') {
+            return url.replace(/\/+$/, '');
         }
-    } catch {
-        // /config.json not available (local dev) — fall through
-    }
+    } catch { /* ignore */ }
     return '';
 }
 
 /**
- * Get the API base URL.  First call may be async (fetches /config.json);
- * subsequent calls return the cached value synchronously.
- */
-export async function getApiUrl(): Promise<string> {
-    if (_cachedUrl !== null) return _cachedUrl;
-
-    // Build-time var takes priority
-    const bt = buildTimeUrl();
-    if (bt) {
-        _cachedUrl = bt.replace(/\/+$/, '');
-        return _cachedUrl;
-    }
-
-    // Try runtime config (only fetch once)
-    if (!_fetchPromise) {
-        _fetchPromise = fetchRuntimeConfig();
-    }
-    const rt = await _fetchPromise;
-    _cachedUrl = rt || 'http://localhost:8100';
-    return _cachedUrl;
-}
-
-/**
- * Synchronous getter — returns cached URL or build-time URL or fallback.
- * Use this in places that can't be async (e.g. top-level const).
- * Will be correct after the first `getApiUrl()` call resolves.
+ * Synchronous getter — returns the correct API URL immediately.
+ * Works because index.html pre-loads /config.json synchronously.
  */
 export function getApiUrlSync(): string {
     if (_cachedUrl !== null) return _cachedUrl;
@@ -70,7 +44,17 @@ export function getApiUrlSync(): string {
         _cachedUrl = bt.replace(/\/+$/, '');
         return _cachedUrl;
     }
+    const rt = runtimeUrl();
+    if (rt) {
+        _cachedUrl = rt;
+        return _cachedUrl;
+    }
     return 'http://localhost:8100';
+}
+
+/** Async version — kept for compatibility, delegates to sync now. */
+export async function getApiUrl(): Promise<string> {
+    return getApiUrlSync();
 }
 
 /** API key from build-time env (if any) */
@@ -81,7 +65,3 @@ export const API_KEY: string = (() => {
         return '';
     }
 })();
-
-// Eagerly kick off the runtime config fetch so it's ready by the time
-// the first API call happens.
-getApiUrl();
