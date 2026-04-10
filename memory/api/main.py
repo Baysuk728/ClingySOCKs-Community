@@ -160,7 +160,7 @@ print(f"🌐 CORS allowed origins: {ALLOWED_ORIGINS}")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_origin_regex=r"https://.*\.up\.railway\.app" if not _cors_env else None,
+    allow_origin_regex=r"https://.*\.up\.railway\.app" if _on_railway else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
