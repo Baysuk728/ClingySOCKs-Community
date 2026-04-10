@@ -2,6 +2,11 @@
 builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
+# To use pre-built GHCR image instead, replace [build] above with:
+# [build]
+# builder = "image"
+# image = "ghcr.io/<your-github-user>/clingysocks-backend:latest"
+
 [deploy]
 healthcheckPath = "/health"
 healthcheckTimeout = 300
