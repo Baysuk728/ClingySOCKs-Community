@@ -74,6 +74,22 @@
 
 <body>
   <div id="root"></div>
+  <script>
+    // Pre-load runtime config synchronously so all modules see the correct API URL
+    (function() {
+      try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/config.json', false); // synchronous
+        xhr.send();
+        if (xhr.status === 200) {
+          var cfg = JSON.parse(xhr.responseText);
+          if (cfg.VITE_MEMORY_API_URL && cfg.VITE_MEMORY_API_URL !== 'RUNTIME_API_URL_PLACEHOLDER') {
+            window.__RUNTIME_CONFIG__ = cfg;
+          }
+        }
+      } catch(e) { /* local dev — no config.json */ }
+    })();
+  </script>
   <script type="module" src="/src/index.tsx"></script>
 </body>
 
