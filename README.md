@@ -3,7 +3,7 @@
 # ClingySOCKs
 ### Relational memory engine for AI agents
 
-[![Deploy on Railway](https://img.shields.io/badge/Railway-Deploy_on_Railway-9524f2?style=flat&logo=railway&logoColor=white)](https://railway.app/template/YOUR_ACTUAL_TEMPLATE_ID?referralCode=FeqUUU)
+[![Deploy on Railway](https://img.shields.io/badge/Railway-Deploy_on_Railway-9524f2?style=flat&logo=railway&logoColor=white)](https://railway.com/deploy/clingysocks?referralCode=FeqUUU&utm_medium=integration&utm_source=template&utm_campaign=generic)
 [![Discord](https://img.shields.io/badge/Discord-Join_Community-7289da?style=flat&logo=discord&logoColor=white)](https://discord.gg/Us7vyUf3)
 [![Support the dev](https://img.shields.io/badge/Support_The_Dev-Donate-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/clingy.socks)
 
