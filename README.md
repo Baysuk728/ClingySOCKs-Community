@@ -35,7 +35,7 @@ ClingySOCKs is currently in **Active Beta**. This means:
 ## How It Works
 1. **Add your API keys** to `memory/.env` (Gemini, OpenAI, Anthropic, etc.)
 2. **Create an agent** — set up a persona with a name, model, and personality.
-3. **Import a ChatGPT export** — feed in your conversation history for memory extraction.
+3. **Import a ChatGPT or Claude export** — feed in your conversation history for memory extraction.
 4. **Run harvest** — the engine processes conversations and builds a relational memory graph.
 5. **Start chatting** — your agent now remembers context across conversations.
 
