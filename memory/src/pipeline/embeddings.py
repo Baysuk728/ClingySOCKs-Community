@@ -51,11 +51,11 @@ def _is_meaningful_message(content: str) -> bool:
     return True
 
 
-def generate_embedding(text: str) -> list[float]:
+async def generate_embedding(text: str) -> list[float]:
     """
-    Generate a single embedding vector using LiteLLM (synchronous).
+    Generate a single embedding vector using LiteLLM (asynchronous).
     """
-    response = litellm.embedding(
+    response = await litellm.aembedding(
         model=EMBEDDING_MODEL,
         input=[text],
         dimensions=EMBEDDING_DIMENSIONS,
@@ -63,9 +63,9 @@ def generate_embedding(text: str) -> list[float]:
     return response.data[0]["embedding"]
 
 
-def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
+async def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
     """
-    Generate embeddings for a batch of texts (synchronous).
+    Generate embeddings for a batch of texts (asynchronous).
     """
     if not texts:
         return []
@@ -75,7 +75,7 @@ def generate_embeddings_batch(texts: list[str]) -> list[list[float]]:
     for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
         batch = texts[i:i + EMBEDDING_BATCH_SIZE]
         print(f"    📡 Batch {i // EMBEDDING_BATCH_SIZE + 1}: {len(batch)} items...")
-        response = litellm.embedding(
+        response = await litellm.aembedding(
             model=EMBEDDING_MODEL,
             input=batch,
             dimensions=EMBEDDING_DIMENSIONS,
@@ -220,10 +220,10 @@ async def embed_entity_memories(
 
             print(f"  🔢 {mem_type}: embedding {len(to_embed)} items...")
 
-            # Generate embeddings in batch (synchronous)
+            # Generate embeddings in batch (asynchronous)
             texts = [t[1] for t in to_embed]
             try:
-                vectors = generate_embeddings_batch(texts)
+                vectors = await generate_embeddings_batch(texts)
             except Exception as e:
                 print(f"  ❌ Embedding failed for {mem_type}: {e}")
                 continue
@@ -335,7 +335,7 @@ async def _embed_messages(
     # Generate embeddings in batch
     texts = [t[1] for t in to_embed]
     try:
-        vectors = generate_embeddings_batch(texts)
+        vectors = await generate_embeddings_batch(texts)
     except Exception as e:
         print(f"  ❌ Embedding failed for messages: {e}")
         return 0
@@ -380,7 +380,7 @@ async def embed_single_item(
         return False
 
     try:
-        vector = generate_embedding(text)
+        vector = await generate_embedding(text)
         text_hash = _content_hash(text)
 
         with get_session() as session:
