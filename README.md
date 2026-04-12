@@ -3,24 +3,41 @@
 # ClingySOCKs
 ### Relational memory engine for AI agents
 
-[![Deploy on Railway](https://img.shields.io/badge/Railway-Deploy_on_Railway-9524f2?style=for-the-badge&logo=railway&logoColor=white)](https://railway.app/template/YOUR_ACTUAL_TEMPLATE_ID?referralCode=FeqUUU)
-[![Discord](https://img.shields.io/discord/1491033549812535336?style=for-the-badge&logo=discord&logoColor=white&label=Discord&color=7289da)](https://discord.gg/Us7vyUf3)
-[![Support the dev](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-Donate-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/clingy.socks)
-
-</div>
-# ClingySOCKs
-
-Relational memory engine for AI agents.
+[![Deploy on Railway](https://img.shields.io/badge/Railway-Deploy_on_Railway-9524f2?style=flat&logo=railway&logoColor=white)](https://railway.app/template/YOUR_ACTUAL_TEMPLATE_ID?referralCode=FeqUUU)
+[![Discord](https://img.shields.io/badge/Discord-Join_Community-7289da?style=flat&logo=discord&logoColor=white)](https://discord.gg/Us7vyUf3)
+[![Support the dev](https://img.shields.io/badge/Support_The_Dev-Donate-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/clingy.socks)
 
 > **Disclaimer:** ClingySOCKs is an experimental research project exploring persistent memory for AI agents. It is **not** a mental health tool, therapeutic service, or substitute for human relationships. Use responsibly and at your own risk.
 
-## How It Works
+</div>
 
+---
+
+## 🚀 One-Click Setup (Recommended)
+**No coding or terminal required.** The fastest way to get your own private ClingySOCKs instance running is via Railway.
+
+1. **Click the "Deploy on Railway" button** above.
+2. **Enter your OpenRouter API Key** (and your JWT/Encryption secrets if you have them).
+3. **Launch!** Your agent will be live and accessible via a private URL in about 60 seconds.
+
+*Note: New Railway users often receive trial credits, which may allow you to run this engine at no cost for your first month.*
+
+---
+
+## 🛠️ Beta Status & Community
+ClingySOCKs is currently in **Active Beta**. This means:
+* **Things might break:** We are moving fast to improve how AI remembers.
+* **Your feedback matters:** If you find a bug or have a feature idea, please let us know!
+* **Join the Lab:** Our [Discord Community](https://discord.gg/Us7vyUf3) is where we test new ideas and troubleshoot together.
+
+---
+
+## How It Works
 1. **Add your API keys** to `memory/.env` (Gemini, OpenAI, Anthropic, etc.)
-2. **Create an agent** — set up a persona with a name, model, and personality
-3. **Import a ChatGPT export** — feed in your conversation history for memory extraction
-4. **Run harvest** — the engine processes conversations and builds a relational memory graph
-5. **Start chatting** — your agent now remembers context across conversations
+2. **Create an agent** — set up a persona with a name, model, and personality.
+3. **Import a ChatGPT export** — feed in your conversation history for memory extraction.
+4. **Run harvest** — the engine processes conversations and builds a relational memory graph.
+5. **Start chatting** — your agent now remembers context across conversations.
 
 ## Quick Start
 
