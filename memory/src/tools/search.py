@@ -85,7 +85,7 @@ async def search_memories(
             print(f"  ⚠️ Archive resurrection failed: {e}")
 
     if EMBEDDINGS_ENABLED:
-        search_results = _semantic_search(entity_id, query, memory_types, limit)
+        search_results = await _semantic_search(entity_id, query, memory_types, limit)
     else:
         search_results = _ilike_search(entity_id, query, memory_types, limit)
         
@@ -100,7 +100,7 @@ async def search_memories(
     return results
 
 
-def _semantic_search(
+async def _semantic_search(
     entity_id: str,
     query: str,
     memory_types: list[str] | None,
@@ -115,7 +115,7 @@ def _semantic_search(
     from src.pipeline.embeddings import generate_embedding
 
     try:
-        query_vector = generate_embedding(query)
+        query_vector = await generate_embedding(query)
     except Exception as e:
         print(f"  ⚠️ Embedding query failed, falling back to ILIKE: {e}")
         return _ilike_search(entity_id, query, memory_types, limit)

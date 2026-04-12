@@ -256,6 +256,24 @@ async def harvest_entity(
                     context_window.add_result(result)
                     stats["chunks_processed"] += 1
                     
+                    # Factual entity extraction (moved into main loop to avoid second pass)
+                    chunk_text_factual = format_chunk_for_llm(chunk, agent_name)
+                    narrative_ctx = result.rolling_summary
+                    first_msg_id = chunk.messages[0].id if chunk.messages else None
+                    
+                    factual_stats = await run_factual_extraction(
+                        entity_id=entity_id,
+                        session=session,
+                        chunk_text=chunk_text_factual,
+                        agent_name=agent_name,
+                        user_name=user_name,
+                        narrative_context=narrative_ctx,
+                        source_message_id=first_msg_id,
+                    )
+                    stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
+                    stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
+                    stats["edges_created"] += factual_stats.get("edges_created", 0)
+
                     # Update live progress
                     chunks_processed_total += 1
                     _update_harvest_progress(
@@ -290,32 +308,6 @@ async def harvest_entity(
                     stats["edges_created"] += edge_stats.get("edges_created", 0)
                     stats["arcs_created"] += edge_stats.get("arcs_created", 0)
 
-                    # Factual entity extraction (per chunk)
-                    for chunk in chunk_result.chunks:
-                        chunk_text = format_chunk_for_llm(chunk, agent_name)
-                        # Get rolling context from the matching chunk result
-                        chunk_idx = chunk.chunk_order
-                        results_list = context_window.all_results
-                        narrative_ctx = (
-                            results_list[chunk_idx].rolling_summary
-                            if chunk_idx < len(results_list)
-                            else ""
-                        )
-                        first_msg_id = (
-                            chunk.messages[0].id if chunk.messages else None
-                        )
-                        factual_stats = await run_factual_extraction(
-                            entity_id=entity_id,
-                            session=session,
-                            chunk_text=chunk_text,
-                            agent_name=agent_name,
-                            user_name=user_name,
-                            narrative_context=narrative_ctx,
-                            source_message_id=first_msg_id,
-                        )
-                        stats["edges_created"] += factual_stats.get("edges_created", 0)
-                        stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
-                        stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
 
                     # Cross-agent entity linking (detect references to other agents)
                     try:
