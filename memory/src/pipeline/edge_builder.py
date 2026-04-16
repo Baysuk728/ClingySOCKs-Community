@@ -18,6 +18,7 @@ from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
+from src.model_registry import LOCAL_API_BASE, get_llm_timeout
 from src.db.models import (
     Edge, Arc, ArcEvent, Relationship, FactualEntity,
 )
@@ -157,6 +158,7 @@ RULES:
             temperature=EXTRACTION_TEMPERATURE,
             max_tokens=16384,
             response_format={"type": "json_object"},
+            timeout=get_llm_timeout(EXTRACTION_MODEL, LOCAL_API_BASE),
         )
 
         raw = response.choices[0].message.content
