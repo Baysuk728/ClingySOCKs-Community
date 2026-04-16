@@ -109,7 +109,7 @@ async def _generate_dream(
             ],
             temperature=0.7, # Higher temp for dreaming
             max_tokens=1024,
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
             timeout=get_llm_timeout(NARRATIVE_MODEL, LOCAL_API_BASE)
         )
         
