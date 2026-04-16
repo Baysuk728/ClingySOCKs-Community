@@ -15,6 +15,7 @@ from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
+from src.model_registry import LOCAL_API_BASE, get_llm_timeout
 from src.prompts.extraction import build_extraction_prompt, EXTRACTION_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ChunkResult
 from src.pipeline.chunker import ConversationChunk
@@ -60,6 +61,7 @@ async def run_extraction_pass(
             temperature=EXTRACTION_TEMPERATURE,
             max_tokens=MAX_OUTPUT_TOKENS,
             response_format={"type": "json_object"},
+            timeout=get_llm_timeout(EXTRACTION_MODEL, LOCAL_API_BASE),
         )
 
         raw_content = response.choices[0].message.content
