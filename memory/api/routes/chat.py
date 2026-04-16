@@ -22,6 +22,7 @@ import uuid
 from datetime import datetime, timezone
 from src.db.session import get_session
 from src.db.models import Message, Conversation, Entity
+from src.model_registry import get_llm_timeout
 
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
@@ -483,10 +484,12 @@ async def chat(entity_id: str, req: ChatRequest):
         if _is_local:
             from src.model_registry import OLLAMA_API_BASE
             kwargs["api_base"] = OLLAMA_API_BASE
-        elif _lower_model.startswith("openai/") and not cfg.api_key:
+        elif _lower_model.startswith("openai/"):
             from src.model_registry import LOCAL_API_BASE
             if LOCAL_API_BASE:
                 kwargs["api_base"] = LOCAL_API_BASE
+        
+        kwargs["timeout"] = get_llm_timeout(model, kwargs.get("api_base"))
 
         # Request usage stats in streaming mode (needed for cache hit detection)
         # Note: Gemini handles this automatically; OpenAI/Anthropic need the option
