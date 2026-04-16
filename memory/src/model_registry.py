@@ -507,3 +507,19 @@ def get_configured_providers() -> list[str]:
     if _ollama_explicit or _local_explicit or _is_cache_valid("local"):
         configured.append("local")
     return configured
+
+DEFAULT_LLM_TIMEOUT = float(os.getenv("LITELLM_TIMEOUT", "600"))
+LOCAL_LLM_TIMEOUT = float(os.getenv("LITELLM_LOCAL_TIMEOUT", "3600"))
+
+def get_llm_timeout(model: str, api_base: str | None = None) -> float:
+    def _norm(x: str | None) -> str:
+        return (x or "").rstrip("/")
+
+    if _norm(api_base) in {_norm(LOCAL_API_BASE), _norm(OLLAMA_API_BASE)}:
+        return LOCAL_LLM_TIMEOUT
+
+    lower = (model or "").lower()
+    if lower.startswith(("ollama/", "ollama_chat/")):
+        return LOCAL_LLM_TIMEOUT
+
+    return DEFAULT_LLM_TIMEOUT
