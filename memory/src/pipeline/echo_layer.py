@@ -14,6 +14,7 @@ from src.config import (
     TIME_GAP_HOURS, NARRATIVE_MODEL, NARRATIVE_TEMPERATURE,
     GEMINI_API_KEY, OPENAI_API_KEY
 )
+from src.model_registry import LOCAL_API_BASE, get_llm_timeout
 from src.pipeline.chunker import ConversationChunk
 from src.prompts.echo import build_echo_prompt, ECHO_SYSTEM_INSTRUCTION
 
@@ -109,6 +110,7 @@ async def _generate_dream(
             temperature=0.7, # Higher temp for dreaming
             max_tokens=1024,
             response_format={"type": "json_object"}
+            timeout=get_llm_timeout(NARRATIVE_MODEL, LOCAL_API_BASE)
         )
         
         content = response.choices[0].message.content
