@@ -695,6 +695,28 @@ class HarvestProgress(Base):
     entity = relationship("Entity", back_populates="harvest_progress")
 
 
+class HarvestChunkCheckpoint(Base):
+    """Durable per-chunk checkpoints so harvest can resume synthesis after interruption."""
+    __tablename__ = "harvest_chunk_checkpoints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    entity_id = Column(Text, ForeignKey("entities.id"), nullable=False)
+    conversation_id = Column(Text, ForeignKey("conversations.id"), nullable=False)
+    chunk_order = Column(Integer, nullable=False)
+    first_message_index = Column(Integer, nullable=False)
+    last_message_index = Column(Integer, nullable=False)
+    checkpoint_data = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
+                        onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint("entity_id", "conversation_id", "chunk_order", name="uq_harvest_chunk_checkpoint"),
+        Index("idx_harvest_chunk_conv_order", "conversation_id", "chunk_order"),
+        Index("idx_harvest_chunk_conv_last_idx", "conversation_id", "last_message_index"),
+    )
+
+
 class HarvestLog(Base):
     __tablename__ = "harvest_logs"
 

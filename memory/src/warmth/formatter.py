@@ -39,6 +39,45 @@ SECTION_CONFIG = {
 }
 
 
+def _format_list_section(items: list) -> str:
+    """Convert a list of dicts (from builder) into a formatted string.
+
+    Handles the sections that builder.py stores as lists of dicts
+    (recent_events, memory_blocks) instead of pre-formatted strings.
+    """
+    if not items:
+        return ""
+    lines = []
+    for item in items:
+        if isinstance(item, dict):
+            title = item.get("title", "")
+            content = item.get("content", "")
+            tier = item.get("tier", "")
+            category = item.get("category", "")
+            pinned = item.get("pinned", False)
+            # Build a concise line
+            tags = []
+            if tier:
+                tags.append(tier)
+            if category:
+                tags.append(category)
+            if pinned:
+                tags.append("pinned")
+            tag_str = f" [{', '.join(tags)}]" if tags else ""
+            if title and content:
+                preview = content[:200] + "…" if len(content) > 200 else content
+                lines.append(f"• {title}{tag_str}: {preview}")
+            elif title:
+                lines.append(f"• {title}{tag_str}")
+            elif content:
+                preview = content[:200] + "…" if len(content) > 200 else content
+                lines.append(f"• {preview}")
+        elif isinstance(item, str):
+            lines.append(f"• {item}")
+        # Skip items that aren't dicts or strings
+    return "\n".join(lines)
+
+
 def format_warm_memory(
     sections: dict,
     level: WarmLevel = "standard",
@@ -87,6 +126,13 @@ def format_warm_memory(
         content = sections.get(section_key)
         if not content:
             continue
+
+        # Some sections (recent_events, memory_blocks) may be lists of dicts
+        # from the builder — convert to a displayable string first.
+        if isinstance(content, list):
+            content = _format_list_section(content)
+            if not content:
+                continue
 
         block = f"━━━ {label} ━━━\n{content}"
 

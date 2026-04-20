@@ -12,6 +12,7 @@ Ties together the full pipeline:
 """
 
 import asyncio
+from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -24,11 +25,11 @@ from src.db.models import (
     Narrative, Relationship, InsideJoke, IntimateMoment, Permission,
     RelationalRitual, SharedMythology, UnresolvedThread, EchoDream,
     HarvestLog, UserProfile, PreferenceEvolution, MemoryBlock,
-    HarvestProgress,
+    HarvestProgress, HarvestChunkCheckpoint,
 )
 from src.db.session import get_session
 from src.pipeline.chunker import (
-    chunk_conversation, ChunkMessage, format_chunk_stats,
+    chunk_conversation, ChunkMessage, ConversationChunk, format_chunk_stats,
 )
 from src.pipeline.context_window import ContextWindow, ChunkResult
 from src.pipeline.pass1_narrative import run_narrative_pass
@@ -88,6 +89,126 @@ def _update_harvest_progress(
             session.commit()
     except Exception as e:
         console.print(f"⚠️ [yellow]Failed to update harvest progress:[/yellow] {e}")
+
+
+
+# ============================================================================
+# CHECKPOINT HELPERS — durable per-chunk state for crash-resilient harvesting
+# ============================================================================
+
+def _chunk_result_to_dict(result: ChunkResult) -> dict:
+    """Serialize a ChunkResult for durable checkpoint storage.
+
+    Note: assumes all ChunkResult fields are JSON-serializable (strings,
+    lists of dicts, ints). If new non-serializable fields are added to
+    ChunkResult, this will need updating.
+    """
+    return asdict(result)
+
+
+def _chunk_result_from_dict(data: dict) -> ChunkResult:
+    """Rehydrate a ChunkResult from checkpoint storage."""
+    result = ChunkResult(chunk_order=data.get("chunk_order", 0))
+    for field_name in result.__dataclass_fields__.keys():
+        if field_name == "chunk_order":
+            continue
+        if field_name in data:
+            setattr(result, field_name, data[field_name])
+    return result
+
+
+def _checkpoint_payload(result: ChunkResult, *, factual_complete: bool = False) -> dict:
+    """Build the JSONB payload for a checkpoint row."""
+    payload = _chunk_result_to_dict(result)
+    payload["_factual_complete"] = factual_complete
+    return payload
+
+
+def _checkpoint_factual_complete(checkpoint: HarvestChunkCheckpoint) -> bool:
+    """Check whether factual extraction already ran for this checkpoint."""
+    data = checkpoint.checkpoint_data or {}
+    return bool(data.get("_factual_complete", False))
+
+
+def _mark_checkpoint_factual_complete(checkpoint: HarvestChunkCheckpoint, value: bool = True) -> None:
+    """Flag a checkpoint's factual extraction as done."""
+    data = dict(checkpoint.checkpoint_data or {})
+    data["_factual_complete"] = value
+    checkpoint.checkpoint_data = data
+    checkpoint.updated_at = datetime.now(timezone.utc)
+
+
+def _load_chunk_checkpoints(session, entity_id: str, conversation_id: str) -> list[HarvestChunkCheckpoint]:
+    """Load all existing checkpoints for a conversation, ordered by chunk."""
+    return (
+        session.query(HarvestChunkCheckpoint)
+        .filter_by(entity_id=entity_id, conversation_id=conversation_id)
+        .order_by(HarvestChunkCheckpoint.chunk_order.asc())
+        .all()
+    )
+
+
+def _upsert_chunk_checkpoint(
+    session, entity_id, conversation_id, chunk_order,
+    first_message_index, last_message_index, result,
+    factual_complete=False,
+) -> HarvestChunkCheckpoint:
+    """Create or update a per-chunk checkpoint row."""
+    checkpoint = (
+        session.query(HarvestChunkCheckpoint)
+        .filter_by(entity_id=entity_id, conversation_id=conversation_id, chunk_order=chunk_order)
+        .first()
+    )
+    payload = _checkpoint_payload(result, factual_complete=factual_complete)
+    if checkpoint:
+        checkpoint.first_message_index = first_message_index
+        checkpoint.last_message_index = last_message_index
+        checkpoint.checkpoint_data = payload
+        checkpoint.updated_at = datetime.now(timezone.utc)
+    else:
+        checkpoint = HarvestChunkCheckpoint(
+            entity_id=entity_id, conversation_id=conversation_id,
+            chunk_order=chunk_order, first_message_index=first_message_index,
+            last_message_index=last_message_index, checkpoint_data=payload,
+        )
+        session.add(checkpoint)
+    return checkpoint
+
+
+def _delete_chunk_checkpoints(session, entity_id: str, conversation_id: str) -> int:
+    """Remove all checkpoints for a conversation (called after successful synthesis)."""
+    return (
+        session.query(HarvestChunkCheckpoint)
+        .filter_by(entity_id=entity_id, conversation_id=conversation_id)
+        .delete(synchronize_session=False)
+    )
+
+
+def _rebuild_chunk_from_checkpoint(session, conversation_id, checkpoint) -> ConversationChunk | None:
+    """Reconstruct a ConversationChunk from a checkpoint's message range."""
+    rows = (
+        session.query(Message)
+        .filter_by(conversation_id=conversation_id)
+        .filter(Message.message_index >= checkpoint.first_message_index)
+        .filter(Message.message_index <= checkpoint.last_message_index)
+        .order_by(Message.message_index)
+        .all()
+    )
+    if not rows:
+        return None
+    chunk_messages = [
+        ChunkMessage(id=m.id, content=m.content, timestamp=m.timestamp, sender_id=m.sender_id)
+        for m in rows
+    ]
+    return ConversationChunk(
+        chunk_id=f"{conversation_id}-checkpoint-{checkpoint.chunk_order}",
+        chunk_order=checkpoint.chunk_order,
+        messages=chunk_messages,
+        char_count=sum(len(m.content) for m in chunk_messages),
+        message_count=len(chunk_messages),
+        time_start=chunk_messages[0].timestamp,
+        time_end=chunk_messages[-1].timestamp,
+    )
 
 
 async def harvest_entity(
@@ -151,7 +272,7 @@ async def harvest_entity(
             
         convs = query.all()
         # Cache minimal data needed for the loop
-        conversations_metadata = [{"id": c.id, "title": c.title} for c in convs]
+        conversations_metadata = [{"id": c.id, "title": c.title, "message_count": c.message_count or 0} for c in convs]
         
     console.print(f"📋 Found {len(conversations_metadata)} conversations to process\n")
     
@@ -179,7 +300,52 @@ async def harvest_entity(
                 conv.harvest_status = "processing"
                 session.commit() # Commit status update immediately
 
-                # Load messages
+                # ── Checkpoint Resume: check for prior incomplete run ──
+                existing_checkpoints = _load_chunk_checkpoints(session, entity_id, conv.id)
+                restored_chunk_count = 0
+
+                # Initialize context window
+                context_window = ContextWindow()
+                result: ChunkResult = ChunkResult(chunk_order=-1)  # Dummy initial
+
+                # Build existing memory brief for context injection
+                existing_memory = _build_memory_brief(session, entity_id)
+
+                # Restore previously completed chunks from checkpoints
+                if existing_checkpoints:
+                    console.print(f"   🔄 Resuming: found {len(existing_checkpoints)} checkpoints")
+                    for cp in existing_checkpoints:
+                        restored_result = _chunk_result_from_dict(cp.checkpoint_data or {})
+                        context_window.add_result(restored_result)
+                        restored_chunk_count += 1
+                        stats["chunks_processed"] += 1
+
+                        # Retry factual extraction if it didn't complete last time
+                        if not _checkpoint_factual_complete(cp):
+                            rebuilt_chunk = _rebuild_chunk_from_checkpoint(session, conv.id, cp)
+                            if rebuilt_chunk:
+                                console.print(f"   🔁 Re-running factual extraction for chunk {cp.chunk_order}")
+                                chunk_text_factual = format_chunk_for_llm(rebuilt_chunk, agent_name)
+                                narrative_ctx = restored_result.rolling_summary
+                                first_msg_id = rebuilt_chunk.messages[0].id if rebuilt_chunk.messages else None
+                                factual_stats = await run_factual_extraction(
+                                    entity_id=entity_id,
+                                    session=session,
+                                    chunk_text=chunk_text_factual,
+                                    agent_name=agent_name,
+                                    user_name=user_name,
+                                    narrative_context=narrative_ctx,
+                                    source_message_id=first_msg_id,
+                                )
+                                stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
+                                stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
+                                stats["edges_created"] += factual_stats.get("edges_created", 0)
+                                _mark_checkpoint_factual_complete(cp)
+                                session.commit()
+
+                    console.print(f"   ✅ Restored {restored_chunk_count} chunks from checkpoints")
+
+                # Load new (unharvested) messages
                 messages = (
                     session.query(Message)
                     .filter_by(conversation_id=conv.id)
@@ -188,40 +354,43 @@ async def harvest_entity(
                     .all()
                 )
 
-                if not messages:
+                if not messages and not existing_checkpoints:
                     console.print("   ℹ️ No new messages to process")
                     conv.harvest_status = "done"
                     session.commit()
                     continue
 
-                # Convert to ChunkMessages
-                chunk_messages = [
-                    ChunkMessage(
-                        id=m.id,
-                        content=m.content,
-                        timestamp=m.timestamp,
-                        sender_id=m.sender_id,
+                # Chunk new messages (skip if only resuming checkpoints)
+                new_chunks = []
+                if messages:
+                    chunk_messages = [
+                        ChunkMessage(
+                            id=m.id,
+                            content=m.content,
+                            timestamp=m.timestamp,
+                            sender_id=m.sender_id,
+                        )
+                        for m in messages
+                    ]
+
+                    chunk_result = chunk_conversation(
+                        messages=chunk_messages,
+                        conversation_id=conv.id,
+                        max_chunk_chars=MAX_CHUNK_CHARS,
                     )
-                    for m in messages
-                ]
+                    console.print(format_chunk_stats(chunk_result, conv.title))
+                    new_chunks = chunk_result.chunks
 
-                # Chunk the conversation
-                chunk_result = chunk_conversation(
-                    messages=chunk_messages,
-                    conversation_id=conv.id,
-                    max_chunk_chars=MAX_CHUNK_CHARS,
-                )
-                console.print(format_chunk_stats(chunk_result, conv.title))
+                    # Update progress estimate with actual chunk count
+                    total_chunks_estimate += len(new_chunks) + restored_chunk_count
+                    _update_harvest_progress(entity_id, total_chunks=total_chunks_estimate)
 
-                # Initialize context window
-                context_window = ContextWindow()
-                result: ChunkResult = ChunkResult(chunk_order=-1) # Dummy initial
+                # Process new chunks (skip those already checkpointed)
+                checkpointed_orders = {cp.chunk_order for cp in existing_checkpoints}
+                for chunk in new_chunks:
+                    if chunk.chunk_order in checkpointed_orders:
+                        continue  # Already restored above
 
-                # Build existing memory brief for context injection
-                existing_memory = _build_memory_brief(session, entity_id)
-
-                # Process chunks
-                for chunk in chunk_result.chunks:
                     # Pass 1: Narrative
                     result = await run_narrative_pass(
                         chunk=chunk,
@@ -242,7 +411,7 @@ async def harvest_entity(
                         existing_lexicon_terms=context_window.get_known_lexicon_terms(),
                     )
                     stats["pass2_calls"] += 1
-                    
+
                     # Echo Pass (Dreams)
                     dreams = await run_echo_pass(
                         chunk=chunk,
@@ -255,12 +424,28 @@ async def harvest_entity(
                     # Add to context window
                     context_window.add_result(result)
                     stats["chunks_processed"] += 1
-                    
-                    # Factual entity extraction (moved into main loop to avoid second pass)
+
+                    # ── Checkpoint: persist this chunk's results durably ──
+                    chunk_msg_ids = {m.id for m in chunk.messages}
+                    chunk_source_msgs = [m for m in messages if m.id in chunk_msg_ids]
+                    first_idx = chunk_source_msgs[0].message_index if chunk_source_msgs else 0
+                    last_idx = chunk_source_msgs[-1].message_index if chunk_source_msgs else 0
+
+                    _upsert_chunk_checkpoint(
+                        session, entity_id, conv.id, chunk.chunk_order,
+                        first_message_index=first_idx,
+                        last_message_index=last_idx,
+                        result=result,
+                        factual_complete=False,
+                    )
+                    session.commit()
+                    console.print(f"   💾 Checkpointed chunk {chunk.chunk_order} ({first_idx}→{last_idx})")
+
+                    # Factual entity extraction
                     chunk_text_factual = format_chunk_for_llm(chunk, agent_name)
                     narrative_ctx = result.rolling_summary
                     first_msg_id = chunk.messages[0].id if chunk.messages else None
-                    
+
                     factual_stats = await run_factual_extraction(
                         entity_id=entity_id,
                         session=session,
@@ -274,10 +459,20 @@ async def harvest_entity(
                     stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
                     stats["edges_created"] += factual_stats.get("edges_created", 0)
 
+                    # Mark factual extraction complete in checkpoint
+                    cp_row = (
+                        session.query(HarvestChunkCheckpoint)
+                        .filter_by(entity_id=entity_id, conversation_id=conv.id, chunk_order=chunk.chunk_order)
+                        .first()
+                    )
+                    if cp_row:
+                        _mark_checkpoint_factual_complete(cp_row)
+                        session.commit()
+
                     # Update live progress
                     chunks_processed_total += 1
                     _update_harvest_progress(
-                        entity_id, 
+                        entity_id,
                         completed_chunks=chunks_processed_total,
                         current_step=f"Processing Chunk {chunks_processed_total} (from {conv_metadata.get('title')})..."
                     )
@@ -321,20 +516,22 @@ async def harvest_entity(
                         console.print(f"   ⚠️ Cross-agent linking failed: {e}")
 
                     # Update message harvest state
-                    for m in messages:
-                        m.is_harvested = True
+                    if messages:
+                        for m in messages:
+                            m.is_harvested = True
 
-                    # Update conversation harvest state
-                    last_idx = messages[-1].message_index
-                    conv.last_harvested_index = last_idx
+                        # Update conversation harvest state
+                        last_idx = messages[-1].message_index
+                        conv.last_harvested_index = last_idx
+
                     conv.harvest_status = "done"
 
                     # Log harvest
                     log = HarvestLog(
                         entity_id=entity_id,
                         conversation_id=conv.id,
-                        messages_from=messages[0].message_index,
-                        messages_to=last_idx,
+                        messages_from=messages[0].message_index if messages else 0,
+                        messages_to=messages[-1].message_index if messages else 0,
                         message_count=len(messages),
                         llm_used="gemini",
                         items_extracted=stored,
@@ -346,6 +543,12 @@ async def harvest_entity(
                         entity.last_harvest = datetime.now(timezone.utc)
 
                     session.commit()
+
+                    # Clean up checkpoints — synthesis succeeded, no longer needed
+                    deleted_count = _delete_chunk_checkpoints(session, entity_id, conv.id)
+                    if deleted_count:
+                        session.commit()
+                        console.print(f"   🧹 Cleaned up {deleted_count} checkpoints")
 
                     # Generate embeddings (if enabled)
                     if EMBEDDINGS_ENABLED:
