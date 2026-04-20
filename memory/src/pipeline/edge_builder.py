@@ -18,7 +18,7 @@ from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
-from src.model_registry import LOCAL_API_BASE, get_llm_timeout
+from src.model_registry import resolve_for_litellm, get_llm_timeout
 from src.db.models import (
     Edge, Arc, ArcEvent, Relationship, FactualEntity,
 )
@@ -149,8 +149,9 @@ RULES:
     stats = {"edges_created": 0, "edges_updated": 0, "arcs_created": 0, "edges_rejected": 0}
 
     try:
+        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
         response = await litellm.acompletion(
-            model=EXTRACTION_MODEL,
+            model=_resolved["model"],
             messages=[
                 {"role": "system", "content": "You create knowledge graph edges between stored memory items. Only use IDs that actually exist. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
@@ -158,7 +159,8 @@ RULES:
             temperature=EXTRACTION_TEMPERATURE,
             max_tokens=16384,
             response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, LOCAL_API_BASE),
+            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
+            **{k: v for k, v in _resolved.items() if k not in ("model",)},
         )
 
         raw = response.choices[0].message.content

@@ -85,28 +85,30 @@ class PersonaConfig:
         Includes drop_params=True so LiteLLM silently drops any parameters
         the target provider doesn't support (e.g. Anthropic doesn't accept
         presence_penalty / frequency_penalty).
+
+        Local models (local/...) are resolved via resolve_for_litellm() which
+        converts the clean internal ID to LiteLLM's "openai/" format + api_base.
         """
+        from src.model_registry import resolve_for_litellm
+
+        # Resolve model ID → LiteLLM model string + api_base (for local models)
+        resolved = resolve_for_litellm(self.model)
+
         kw: dict = {
-            "model": self.model,
+            "model": resolved["model"],
             "temperature": self.temperature,
             "drop_params": True,
         }
+        # Inject api_base if the resolver determined one (local/ollama models)
+        if "api_base" in resolved:
+            kw["api_base"] = resolved["api_base"]
+
         # Include API key if resolved from vault
         if self.api_key:
             kw["api_key"] = self.api_key
 
-        # Local models — set api_base for Ollama / OpenAI-compatible servers
-        provider = _detect_provider(self.model)
-        if provider == "ollama":
-            from src.model_registry import OLLAMA_API_BASE
-            kw["api_base"] = OLLAMA_API_BASE
-        elif self.model.startswith("openai/") and not self.api_key:
-            # OpenAI-prefixed model with no API key → likely a local server
-            from src.model_registry import LOCAL_API_BASE
-            if LOCAL_API_BASE:
-                kw["api_base"] = LOCAL_API_BASE
-
         # Only include sampling params the provider actually supports
+        # (use original self.model for detection, not the resolved LiteLLM model)
         kw.update(sanitize_sampling_params(
             self.model,
             top_p=self.top_p,
@@ -330,6 +332,7 @@ _MODEL_PREFIX_MAP = {
     "openrouter/": "openrouter/",   # already prefixed — no-op guard
     "ollama_chat/": "ollama_chat/", # already prefixed — no-op guard
     "ollama/": "ollama/",           # already prefixed — no-op guard
+    "local/": "local/",             # already prefixed — no-op guard
 }
 
 
@@ -365,12 +368,19 @@ _PROVIDER_SUPPORTED_PARAMS: dict[str, set[str]] = {
     "xai":       {"top_p", "frequency_penalty", "presence_penalty"},
     "openrouter":{"top_p", "top_k", "frequency_penalty", "presence_penalty"},
     "ollama":    {"top_p", "top_k"},  # Ollama supports top_p and top_k
+    "local":     {"top_p", "top_k"},  # Local models (LM Studio/vLLM) — OpenAI-compatible
 }
 
 
 def _detect_provider(model: str) -> str:
-    """Detect provider family from a LiteLLM model string."""
+    """Detect provider family from an internal model ID string.
+
+    This uses our internal naming convention (local/, ollama_chat/, etc.),
+    NOT the resolved LiteLLM model string.
+    """
     lower = model.lower()
+    if lower.startswith("local/"):
+        return "local"
     if lower.startswith(("ollama_chat/", "ollama/")):
         return "ollama"
     if "anthropic/" in lower or lower.startswith("claude"):

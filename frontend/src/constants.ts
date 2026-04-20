@@ -32,6 +32,8 @@ export const AVAILABLE_MODELS: Record<string, string[]> = {
   ],
   local: [
     // Populated dynamically from Ollama / LM Studio discovery.
+    // Ollama models use "ollama_chat/" prefix.
+    // LM Studio/vLLM models use "local/" prefix (avoids collision with cloud OpenAI).
     // These are common fallbacks shown when the backend is unreachable.
     'ollama_chat/llama3.1',
     'ollama_chat/mistral',

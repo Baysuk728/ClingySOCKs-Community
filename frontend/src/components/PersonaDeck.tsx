@@ -127,14 +127,26 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
     if (currentProvider === 'openrouter' && modelId.startsWith('openrouter/')) {
       return modelId.slice('openrouter/'.length);
     }
+    // For local models, strip "local/" to show "org/model" (e.g. "mistralai/ministral-3-14b")
+    if (currentProvider === 'local' && modelId.startsWith('local/')) {
+      return modelId.slice('local/'.length);
+    }
+    // For ollama, strip "ollama_chat/" prefix
+    if (currentProvider === 'local' && modelId.startsWith('ollama_chat/')) {
+      return modelId.slice('ollama_chat/'.length);
+    }
     // For others, strip "provider/" prefix
     const slash = modelId.indexOf('/');
     return slash > 0 ? modelId.slice(slash + 1) : modelId;
   }, [currentProvider]);
 
-  // Group OpenRouter models by org (mistralai, meta-llama, etc.)
+  // Group local/OpenRouter models by org (mistralai, meta-llama, etc.)
   const groupByOrg = useCallback((modelId: string) => {
-    const stripped = modelId.startsWith('openrouter/') ? modelId.slice('openrouter/'.length) : modelId;
+    // Strip the routing prefix first
+    let stripped = modelId;
+    if (stripped.startsWith('openrouter/')) stripped = stripped.slice('openrouter/'.length);
+    else if (stripped.startsWith('local/')) stripped = stripped.slice('local/'.length);
+    else if (stripped.startsWith('ollama_chat/')) return 'ollama';
     const slash = stripped.indexOf('/');
     return slash > 0 ? stripped.slice(0, slash) : 'other';
   }, []);
@@ -332,7 +344,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       onChange={handleModelChange}
                       placeholder="Search models…"
                       formatLabel={formatModelLabel}
-                      groupBy={currentProvider === 'openrouter' ? groupByOrg : undefined}
+                      groupBy={currentProvider === 'openrouter' || currentProvider === 'local' ? groupByOrg : undefined}
                     />
                   </div>
                   <div>

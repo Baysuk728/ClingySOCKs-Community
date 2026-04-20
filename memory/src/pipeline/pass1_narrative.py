@@ -15,7 +15,7 @@ from src.config import (
     NARRATIVE_MODEL, NARRATIVE_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
-from src.model_registry import LOCAL_API_BASE, get_llm_timeout
+from src.model_registry import resolve_for_litellm, get_llm_timeout
 from src.prompts.narrative import build_narrative_prompt, NARRATIVE_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ChunkResult
 from src.pipeline.chunker import ConversationChunk
@@ -59,8 +59,9 @@ async def run_narrative_pass(
     print(f"  🧠 Pass 1 (Narrative) — Chunk {chunk_order + 1} ({chunk.char_count / 1000:.1f}K chars)...")
 
     try:
+        _resolved = resolve_for_litellm(NARRATIVE_MODEL)
         response = await litellm.acompletion(
-            model=NARRATIVE_MODEL,
+            model=_resolved["model"],
             messages=[
                 {"role": "system", "content": NARRATIVE_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
@@ -68,7 +69,8 @@ async def run_narrative_pass(
             temperature=NARRATIVE_TEMPERATURE,
             max_tokens=MAX_OUTPUT_TOKENS,
             response_format={"type": "json_object"},
-            timeout=get_llm_timeout(NARRATIVE_MODEL, LOCAL_API_BASE),
+            timeout=get_llm_timeout(NARRATIVE_MODEL, _resolved.get("api_base")),
+            **{k: v for k, v in _resolved.items() if k not in ("model",)},
         )
 
         raw_content = response.choices[0].message.content

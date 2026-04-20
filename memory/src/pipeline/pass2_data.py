@@ -15,7 +15,7 @@ from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
-from src.model_registry import LOCAL_API_BASE, get_llm_timeout
+from src.model_registry import resolve_for_litellm, get_llm_timeout
 from src.prompts.extraction import build_extraction_prompt, EXTRACTION_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ChunkResult
 from src.pipeline.chunker import ConversationChunk
@@ -52,8 +52,9 @@ async def run_extraction_pass(
     print(f"  📦 Pass 2 (Data) — Chunk {chunk_result.chunk_order + 1}...")
 
     try:
+        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
         response = await litellm.acompletion(
-            model=EXTRACTION_MODEL,
+            model=_resolved["model"],
             messages=[
                 {"role": "system", "content": EXTRACTION_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
@@ -61,7 +62,8 @@ async def run_extraction_pass(
             temperature=EXTRACTION_TEMPERATURE,
             max_tokens=MAX_OUTPUT_TOKENS,
             response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, LOCAL_API_BASE),
+            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
+            **{k: v for k, v in _resolved.items() if k not in ("model",)},
         )
 
         raw_content = response.choices[0].message.content

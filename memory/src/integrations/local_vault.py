@@ -50,6 +50,7 @@ _MODEL_TO_PROVIDER: dict[str, str] = {
     "openrouter/": "openrouter",
     "ollama_chat/": "ollama",
     "ollama/": "ollama",
+    "local/": "local",  # OpenAI-compatible local server (LM Studio, vLLM)
 }
 
 _PROVIDER_TO_OPENROUTER_PREFIX: dict[str, str] = {
@@ -124,8 +125,8 @@ class LocalKeyVault:
     async def resolve_for_litellm(self, user_id: str, model: str) -> dict:
         provider = self._detect_provider(model)
 
-        # Local models (Ollama, etc.) don't need API keys
-        if provider == "ollama":
+        # Local models (Ollama, LM Studio, vLLM) don't need API keys
+        if provider in ("ollama", "local"):
             return {}
 
         keys = await self._load_keys(user_id)

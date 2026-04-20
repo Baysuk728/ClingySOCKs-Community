@@ -15,7 +15,7 @@ import litellm
 from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE, MAX_OUTPUT_TOKENS,
 )
-from src.model_registry import LOCAL_API_BASE, get_llm_timeout
+from src.model_registry import resolve_for_litellm, get_llm_timeout
 from src.db.models import FactualEntity, Edge
 from src.prompts.factual import (
     build_factual_prompt, FACTUAL_SYSTEM_INSTRUCTION,
@@ -110,8 +110,9 @@ async def run_factual_extraction(
     )
 
     try:
+        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
         response = await litellm.acompletion(
-            model=EXTRACTION_MODEL,
+            model=_resolved["model"],
             messages=[
                 {"role": "system", "content": FACTUAL_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
@@ -119,7 +120,8 @@ async def run_factual_extraction(
             temperature=EXTRACTION_TEMPERATURE,
             max_tokens=MAX_OUTPUT_TOKENS,
             response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, LOCAL_API_BASE),
+            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
+            **{k: v for k, v in _resolved.items() if k not in ("model",)},
         )
 
         raw = response.choices[0].message.content

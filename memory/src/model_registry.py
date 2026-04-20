@@ -68,7 +68,8 @@ _CURATED_MODELS: dict[str, list[str]] = {
         "openrouter/qwen/qwen-2.5-72b-instruct",
     ],
     "local": [
-        # Placeholder — populated dynamically via Ollama / OpenAI-compatible discovery.
+        # Placeholder — populated dynamically via Ollama / LM Studio / vLLM discovery.
+        # Uses "local/" prefix to distinguish from cloud OpenAI models.
         # If no local server is running, this provider is hidden from the frontend.
     ],
     "elevenlabs": [
@@ -210,6 +211,11 @@ async def _fetch_local_models() -> list[str]:
         pass  # Ollama not running — skip silently
 
     # ── OpenAI-compatible local server (LM Studio, vLLM, etc.) ──
+    # Uses "local/" prefix to avoid collision with cloud OpenAI models.
+    # Model IDs from LM Studio often contain slashes (e.g. "mistralai/ministral-3-14b")
+    # which would break the "openai/" prefix scheme (openai/mistralai/ministral-3-14b
+    # gets misrouted to the OpenAI cloud API).  "local/" is resolved to the correct
+    # LiteLLM format + api_base at call time via resolve_for_litellm().
     if LOCAL_API_BASE:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -219,7 +225,7 @@ async def _fetch_local_models() -> list[str]:
                 for m in data.get("data", []):
                     model_id = m.get("id", "")
                     if model_id:
-                        full_id = f"openai/{model_id}"
+                        full_id = f"local/{model_id}"
                         if full_id not in discovered:
                             discovered.append(full_id)
         except Exception:
@@ -508,6 +514,67 @@ def get_configured_providers() -> list[str]:
         configured.append("local")
     return configured
 
+# ── Model Resolution for LiteLLM ─────────────────────
+# Our internal model IDs use a clean prefix scheme:
+#   gemini/...      → Gemini direct API
+#   openai/...      → OpenAI direct API
+#   anthropic/...   → Anthropic direct API
+#   xai/...         → xAI/Grok direct API
+#   openrouter/...  → OpenRouter (org/model after prefix)
+#   ollama_chat/... → Ollama local server
+#   local/...       → OpenAI-compatible local server (LM Studio, vLLM, etc.)
+#
+# The "local/" prefix is our invention — LiteLLM doesn't know about it.
+# resolve_for_litellm() converts it to "openai/<model_id>" + api_base
+# at the moment of the API call, so the slash-heavy model names from
+# LM Studio (like "mistralai/ministral-3-14b") never collide with
+# cloud OpenAI routing.
+
+
+def resolve_for_litellm(model: str) -> dict:
+    """
+    Convert an internal model ID to the kwargs LiteLLM actually needs.
+
+    Returns a dict with at minimum {"model": "..."} and optionally
+    {"api_base": "..."} for local models.
+
+    This is the SINGLE place where "local/" is translated.  Every call
+    site should use this instead of hand-parsing prefixes.
+
+    Examples
+    --------
+    >>> resolve_for_litellm("gemini/gemini-2.5-flash")
+    {"model": "gemini/gemini-2.5-flash"}
+
+    >>> resolve_for_litellm("local/mistralai/ministral-3-14b-reasoning")
+    {"model": "openai/mistralai/ministral-3-14b-reasoning",
+     "api_base": "http://localhost:1234"}
+
+    >>> resolve_for_litellm("ollama_chat/llama3.1")
+    {"model": "ollama_chat/llama3.1",
+     "api_base": "http://localhost:11434"}
+    """
+    result: dict = {}
+
+    if model.startswith("local/"):
+        # Strip "local/" prefix, re-add "openai/" for LiteLLM's OpenAI-compat mode
+        bare_model = model[len("local/"):]
+        result["model"] = f"openai/{bare_model}"
+        result["api_base"] = LOCAL_API_BASE or "http://localhost:1234"
+    elif model.startswith(("ollama_chat/", "ollama/")):
+        result["model"] = model
+        result["api_base"] = OLLAMA_API_BASE
+    else:
+        result["model"] = model
+
+    return result
+
+
+def is_local_model(model: str) -> bool:
+    """Check if a model ID refers to a local inference server."""
+    return model.startswith(("local/", "ollama_chat/", "ollama/"))
+
+
 DEFAULT_LLM_TIMEOUT = float(os.getenv("LITELLM_TIMEOUT", "600"))
 LOCAL_LLM_TIMEOUT = float(os.getenv("LITELLM_LOCAL_TIMEOUT", "3600"))
 
@@ -519,7 +586,7 @@ def get_llm_timeout(model: str, api_base: str | None = None) -> float:
         return LOCAL_LLM_TIMEOUT
 
     lower = (model or "").lower()
-    if lower.startswith(("ollama/", "ollama_chat/")):
+    if lower.startswith(("ollama/", "ollama_chat/", "local/")):
         return LOCAL_LLM_TIMEOUT
 
     return DEFAULT_LLM_TIMEOUT

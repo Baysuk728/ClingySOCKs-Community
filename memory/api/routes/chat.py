@@ -467,34 +467,34 @@ async def chat(entity_id: str, req: ChatRequest):
 
         print(f"🔥 DEBUG: 3. Preparing LLM Call (Streaming={req.stream})...")
         # 3. Prepare Litellm Args
+        # Resolve model ID → LiteLLM format (handles local/ → openai/ + api_base)
+        from src.model_registry import resolve_for_litellm, is_local_model
+        resolved = resolve_for_litellm(model)
+
         kwargs = {
-            "model": model,
+            "model": resolved["model"],
             "messages": final_messages,
             "temperature": req.temperature,
             "max_tokens": req.max_tokens,
             "stream": req.stream
         }
+        # Inject api_base if resolved (local/ollama models)
+        if "api_base" in resolved:
+            kwargs["api_base"] = resolved["api_base"]
+
         # BYOK: inject user's API key if resolved from vault
         if cfg.api_key:
             kwargs["api_key"] = cfg.api_key
 
-        # Local models: inject api_base for Ollama / OpenAI-compatible servers
         _lower_model = model.lower()
-        _is_local = _lower_model.startswith(("ollama_chat/", "ollama/"))
-        if _is_local:
-            from src.model_registry import OLLAMA_API_BASE
-            kwargs["api_base"] = OLLAMA_API_BASE
-        elif _lower_model.startswith("openai/"):
-            from src.model_registry import LOCAL_API_BASE
-            if LOCAL_API_BASE:
-                kwargs["api_base"] = LOCAL_API_BASE
-        
+        _is_local = is_local_model(model)
+
         kwargs["timeout"] = get_llm_timeout(model, kwargs.get("api_base"))
 
         # Request usage stats in streaming mode (needed for cache hit detection)
         # Note: Gemini handles this automatically; OpenAI/Anthropic need the option
-        # Local models (Ollama) don't support stream_options
-        if req.stream and not "gemini" in _lower_model and not _is_local:
+        # Local models (Ollama, LM Studio) don't support stream_options
+        if req.stream and "gemini" not in _lower_model and not _is_local:
             kwargs["stream_options"] = {"include_usage": True}
         kwargs.update(_sampling)
         
