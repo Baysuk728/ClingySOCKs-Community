@@ -35,6 +35,26 @@ const deobfuscate = (str: string): string => {
   }
 };
 
+// Safely read + parse a JSON value from localStorage. On parse failure,
+// clears the corrupted key and returns the fallback, so one bad entry
+// doesn't wedge every subsequent refresh. `transform` lets the caller
+// deobfuscate first (used for API keys).
+function safeJsonRead<T>(
+  key: string,
+  fallback: T,
+  transform: (raw: string) => string = raw => raw,
+): T {
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(transform(raw)) as T;
+  } catch (err) {
+    console.warn(`Corrupted localStorage key "${key}" — clearing cache.`, err);
+    localStorage.removeItem(key);
+    return fallback;
+  }
+}
+
 const App: React.FC = () => {
   const { user, loading: authLoading } = useAuth();
 
@@ -48,53 +68,29 @@ const App: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKeyConfig[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Load all data from localStorage on mount
+  // Load all data from localStorage on mount. Each key is read in isolation
+  // via safeJsonRead so a single corrupted entry doesn't wipe unrelated state
+  // (used to: one bad value would fall through to the outer catch and nuke
+  // agents, sessions, memories, and the current session all at once).
+  //
+  // Agents here are the fast-paint fallback. The Memory API effect below runs
+  // after auth resolves and replaces them with the authoritative backend copy.
   useEffect(() => {
-    try {
-      // Load API keys
-      const storedKeys = localStorage.getItem(STORAGE_KEYS.API_KEYS);
-      if (storedKeys) {
-        setApiKeys(JSON.parse(deobfuscate(storedKeys)));
-      }
+    setApiKeys(safeJsonRead<ApiKeyConfig[]>(STORAGE_KEYS.API_KEYS, [], deobfuscate));
+    setAgents(safeJsonRead<Agent[]>(STORAGE_KEYS.AGENTS, []));
+    setSessions(safeJsonRead<ChatSession[]>(STORAGE_KEYS.SESSIONS, []));
+    setMemories(safeJsonRead<Memory[]>(STORAGE_KEYS.MEMORIES, []));
 
-      // Agents are loaded from Memory API in a separate effect (after auth resolves)
-      // Load localStorage fallback immediately for fast paint
-      const storedAgents = localStorage.getItem(STORAGE_KEYS.AGENTS);
-      if (storedAgents) {
-        setAgents(JSON.parse(storedAgents));
-      } else {
-        setAgents([]);
-      }
+    // Messages are loaded from PostgreSQL on-demand, not from localStorage
+    // (eliminates unbounded localStorage growth)
 
-
-      // Load sessions locally first (as fallback/initial state)
-      const storedSessions = localStorage.getItem(STORAGE_KEYS.SESSIONS);
-      if (storedSessions) {
-        setSessions(JSON.parse(storedSessions));
-      }
-
-      // Messages are loaded from PostgreSQL on-demand, not from localStorage
-      // (eliminates unbounded localStorage growth)
-
-      // Load memories
-      const storedMemories = localStorage.getItem(STORAGE_KEYS.MEMORIES);
-      if (storedMemories) {
-        setMemories(JSON.parse(storedMemories));
-      }
-
-      // Load current session ID
-      const storedCurrentSession = localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION);
-      if (storedCurrentSession) {
-        setCurrentSessionId(storedCurrentSession);
-      }
-
-      setIsLoaded(true);
-    } catch (e) {
-      console.error('Failed to load data from localStorage:', e);
-      // Fall back to empty state
-      setAgents([]);
-      setIsLoaded(true);
+    // Current session ID is a plain string, not JSON
+    const storedCurrentSession = localStorage.getItem(STORAGE_KEYS.CURRENT_SESSION);
+    if (storedCurrentSession) {
+      setCurrentSessionId(storedCurrentSession);
     }
+
+    setIsLoaded(true);
   }, []);
 
   // Load personas from Memory API once auth resolves.
@@ -119,8 +115,12 @@ const App: React.FC = () => {
           return;
         }
 
-        const storedAgents = localStorage.getItem(STORAGE_KEYS.AGENTS);
-        const storedCount = storedAgents ? (JSON.parse(storedAgents) as Agent[]).length : 0;
+        // Isolate the cache read — a parse failure here must not be
+        // reported as "Memory API load failure" (it would misroute
+        // debugging to the backend), and the corrupted cache should be
+        // cleared so it doesn't keep firing on every refresh.
+        const cachedAgents = safeJsonRead<Agent[]>(STORAGE_KEYS.AGENTS, []);
+        const storedCount = cachedAgents.length;
         if (storedCount > 0) {
           console.warn(
             `⚠️ Backend returned 0 personas but localStorage has ${storedCount}; keeping cached agents. ` +
