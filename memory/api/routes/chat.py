@@ -365,22 +365,32 @@ async def chat(entity_id: str, req: ChatRequest):
                 timestamp=msg['timestamp']
             ))
 
-        # Request messages (newer) — deduplicate against history
+        # Request messages (newer) — deduplicate against history.
+        #
+        # The frontend sends a 20-message rolling window as a safety net in
+        # case the DB backfill is empty (new conversation, first turn, etc).
+        # When pg_history IS available, the rolling window overlaps with the
+        # tail of pg_history. Any request message whose timestamp is ≤ the
+        # latest pg_history timestamp is already covered by the authoritative
+        # DB history and must be skipped.
         if req.messages:
+            pg_latest_ts: float = 0
+            if pg_history:
+                pg_latest_ts = max(
+                    (msg.get("timestamp") or 0) for msg in pg_history
+                )
+
             for i, req_msg in enumerate(req.messages):
-                is_duplicate = False
-                if final_ctx_messages and i == 0:
-                    last_hist = final_ctx_messages[-1]
-                    if last_hist.content == req_msg.content:
-                        is_duplicate = True
-                if not is_duplicate:
-                    role = req_msg.role
-                    if role == 'model': role = 'assistant'
-                    final_ctx_messages.append(ContextMessage(
-                        role=role,
-                        content=req_msg.content,
-                        timestamp=req_msg.timestamp
-                    ))
+                if pg_latest_ts and req_msg.timestamp and req_msg.timestamp <= pg_latest_ts:
+                    continue
+
+                role = req_msg.role
+                if role == 'model': role = 'assistant'
+                final_ctx_messages.append(ContextMessage(
+                    role=role,
+                    content=req_msg.content,
+                    timestamp=req_msg.timestamp
+                ))
 
         # 1b. Phase 4 Imperfection Engine — gated: pro+
         friction_directives = ""
