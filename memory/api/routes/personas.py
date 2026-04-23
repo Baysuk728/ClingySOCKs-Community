@@ -189,6 +189,7 @@ async def create_persona(req: PersonaCreateRequest):
             tts_provider=req.tts_provider,
             role_description=req.role_description,
             description=req.description,
+            max_context_chars=req.max_context_chars,
             max_warm_memory=req.max_warm_memory,
             max_history_chars=req.max_history_chars,
             max_history_messages=req.max_history_messages,
@@ -223,7 +224,7 @@ async def update_persona(entity_id: str, req: PersonaUpdateRequest):
             "system_prompt", "voice_id", "tts_provider", "role_description",
             "description",
             # Context
-            "max_warm_memory", "max_history_chars", "max_history_messages",
+            "max_context_chars", "max_warm_memory", "max_history_chars", "max_history_messages",
             # Harvested fields (user-editable)
             "core", "archetype", "traits", "voice_style",
             "values_core", "values_boundaries",
