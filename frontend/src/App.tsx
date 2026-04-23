@@ -97,7 +97,13 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Load personas from Memory API once auth resolves
+  // Load personas from Memory API once auth resolves.
+  //
+  // Policy:
+  //   - API fetch throws  → keep localStorage copy, log error.
+  //   - API returns data  → treat backend as authoritative, replace state + cache.
+  //   - API returns empty → if localStorage had agents, KEEP them (likely transient
+  //     auth/tenant mismatch; don't wipe the tester's personality on a bad fetch).
   useEffect(() => {
     if (!user || authLoading) return;
 
@@ -106,16 +112,26 @@ const App: React.FC = () => {
         console.log('Loading personas from Memory API...');
         const personas = await getPersonas();
 
-        if (personas && personas.length > 0) {
+        if (personas.length > 0) {
           console.log(`✅ Loaded ${personas.length} personas from Memory API`);
           setAgents(personas);
           localStorage.setItem(STORAGE_KEYS.AGENTS, JSON.stringify(personas));
+          return;
+        }
+
+        const storedAgents = localStorage.getItem(STORAGE_KEYS.AGENTS);
+        const storedCount = storedAgents ? (JSON.parse(storedAgents) as Agent[]).length : 0;
+        if (storedCount > 0) {
+          console.warn(
+            `⚠️ Backend returned 0 personas but localStorage has ${storedCount}; keeping cached agents. ` +
+            `This usually means the backend could not resolve your user (owner_user_id mismatch) ` +
+            `or the DB is empty. Check /memory/personas?owner_user_id=${user.uid} manually.`
+          );
         } else {
-          console.log('No personas found in Memory API, keeping current agents');
+          console.log('No personas found in Memory API or localStorage.');
         }
       } catch (error) {
-        console.error('Failed to load personas from Memory API:', error);
-        // Keep whatever was loaded from localStorage
+        console.error('Failed to load personas from Memory API — keeping localStorage copy:', error);
       }
     };
 
