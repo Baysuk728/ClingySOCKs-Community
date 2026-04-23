@@ -10,6 +10,7 @@ Supports:
 
 import json
 import os
+import re
 import time
 from typing import Optional, Union
 
@@ -185,19 +186,33 @@ from src.tools.schemas import ALL_TOOL_SCHEMAS as MEMORY_TOOLS
 
 
 
-def _try_parse_text_tool_calls(content: str) -> list[dict] | None:
-    """
-    Some models (Mistral, older Llama variants) output tool calls as JSON text
-    in the content field instead of using the structured tool_calls API.
+_TOOL_WRAPPER_PATTERNS = [
+    # Qwen 2.5+/Qwen3, Hermes, NousHermes tool format
+    re.compile(r"<tool_call>\s*(?P<payload>.+?)\s*</tool_call>", re.DOTALL),
+    # Llama 3.1/3.2 python-tag tool format; terminator may be <|eom_id|>, <|eot_id|>, or EOS
+    re.compile(r"<\|python_tag\|>\s*(?P<payload>.+?)(?=<\|eom_id\|>|<\|eot_id\|>|\Z)", re.DOTALL),
+    # Mistral / NeMo tool format
+    re.compile(r"\[TOOL_CALLS\]\s*(?P<payload>.+?)(?:\[/TOOL_CALLS\]|\Z)", re.DOTALL),
+]
 
-    Detects these patterns:
-      [{"name": "tool_name", "arguments": {...}}]
-      {"name": "tool_name", "arguments": {...}}
-      [{"name": "tool_name", "parameters": {...}}]
 
-    Returns a list of {"name": str, "arguments": str (JSON)} dicts, or None.
+def _extract_wrapped_payloads(content: str) -> list[str]:
+    """Return any tool-call JSON payloads wrapped in model-specific tags."""
+    payloads: list[str] = []
+    for pat in _TOOL_WRAPPER_PATTERNS:
+        for m in pat.finditer(content):
+            payload = m.group("payload").strip()
+            if payload:
+                payloads.append(payload)
+    return payloads
+
+
+def _parse_tool_call_json(payload: str) -> list[dict] | None:
     """
-    stripped = content.strip()
+    Parse a JSON payload into a normalized list of
+    {"name": str, "arguments": str (JSON)} dicts, or None if it isn't a tool call.
+    """
+    stripped = payload.strip()
     if not stripped or stripped[0] not in ('[', '{'):
         return None
 
@@ -212,10 +227,13 @@ def _try_parse_text_tool_calls(content: str) -> list[dict] | None:
     for item in candidates:
         if not isinstance(item, dict):
             return None
-        # Support {"name": ..., "arguments": ...} and {"name": ..., "parameters": ...}
+        # Support {"name": ..., "arguments": ...}, {"name": ..., "parameters": ...},
+        # and {"function": {"name": ..., "arguments": ...}}
         name = item.get("name")
         if not name and isinstance(item.get("function"), dict):
             name = item["function"].get("name")
+            if not item.get("arguments") and not item.get("parameters"):
+                item = item["function"]  # unwrap so arg lookup below works
         args = item.get("arguments") or item.get("parameters") or {}
         if not name:
             return None
@@ -225,6 +243,37 @@ def _try_parse_text_tool_calls(content: str) -> list[dict] | None:
         })
 
     return result if result else None
+
+
+def _try_parse_text_tool_calls(content: str) -> list[dict] | None:
+    """
+    Some local models (Qwen3, Mistral, Llama 3.1/3.2, Hermes) emit tool calls as
+    text in the content field instead of using the structured tool_calls API.
+
+    Handles wrapper formats:
+      <tool_call>{"name": ..., "arguments": {...}}</tool_call>   (Qwen/Hermes)
+      <|python_tag|>{"name": ..., "parameters": {...}}           (Llama 3.1/3.2)
+      [TOOL_CALLS][{"name": ..., "arguments": {...}}]            (Mistral)
+
+    Also handles raw JSON in the content:
+      [{"name": "tool_name", "arguments": {...}}]
+      {"name": "tool_name", "arguments": {...}}
+
+    Returns a list of {"name": str, "arguments": str (JSON)} dicts, or None.
+    """
+    # Wrapped formats first — a model may emit prose + <tool_call>…</tool_call>.
+    wrapped = _extract_wrapped_payloads(content)
+    if wrapped:
+        collected: list[dict] = []
+        for payload in wrapped:
+            parsed = _parse_tool_call_json(payload)
+            if parsed:
+                collected.extend(parsed)
+        if collected:
+            return collected
+
+    # Fallback: whole content is raw JSON tool call(s)
+    return _parse_tool_call_json(content)
 
 
 async def execute_tool_call(entity_id: str, tool_name: str, args: dict) -> str:

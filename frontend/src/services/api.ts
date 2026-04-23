@@ -247,40 +247,35 @@ export const searchMemories = async (
 // ============================================================================
 
 export const getPersonas = async (): Promise<Agent[]> => {
-  try {
-    const user = auth.currentUser;
-    if (!user) throw new Error('Not authenticated');
+  const user = auth.currentUser;
+  if (!user) throw new Error('Not authenticated');
 
-    const response = await fetch(`${MEMORY_API_URL}/memory/personas?owner_user_id=${user.uid}`, {
-      headers: getHeaders(),
-    });
-    if (!response.ok) throw new Error('Failed to fetch personas');
+  const response = await fetch(`${MEMORY_API_URL}/memory/personas?owner_user_id=${user.uid}`, {
+    headers: getHeaders(),
+  });
+  if (!response.ok) throw new Error(`Failed to fetch personas: ${response.status}`);
 
-    const data = await response.json();
-    if (!data.success) throw new Error('Failed to fetch personas');
+  const data = await response.json();
+  if (!data.success) throw new Error('Failed to fetch personas');
 
-    return (data.personas || []).map((p: any) => ({
-      id: p.entity_id,
-      name: p.name,
-      provider: p.provider || 'gemini',
-      modelId: p.model || '',
-      voiceId: p.voice_id || '',
-      ttsProvider: p.tts_provider || 'google',
-      systemPrompt: p.system_prompt || '',
-      temperature: p.temperature || 0.7,
-      avatar: p.avatar || '🤖',
-      role: p.role_description || 'AI Assistant',
-      description: p.description || '',
-      maxContextChars: p.max_context_chars,
-      maxWarmMemory: p.max_warm_memory,
-      maxHistoryChars: p.max_history_chars,
-      maxHistoryMessages: p.max_history_messages,
-      isSystem: false
-    }));
-  } catch (error) {
-    console.error("Get Personas Error:", error);
-    return [];
-  }
+  return (data.personas || []).map((p: any) => ({
+    id: p.entity_id,
+    name: p.name,
+    provider: p.provider || 'gemini',
+    modelId: p.model || '',
+    voiceId: p.voice_id || '',
+    ttsProvider: p.tts_provider || 'google',
+    systemPrompt: p.system_prompt || '',
+    temperature: p.temperature || 0.7,
+    avatar: p.avatar || '🤖',
+    role: p.role_description || 'AI Assistant',
+    description: p.description || '',
+    maxContextChars: p.max_context_chars,
+    maxWarmMemory: p.max_warm_memory,
+    maxHistoryChars: p.max_history_chars,
+    maxHistoryMessages: p.max_history_messages,
+    isSystem: false
+  }));
 };
 
 export const getPersona = async (personaId: string): Promise<Agent | null> => {
