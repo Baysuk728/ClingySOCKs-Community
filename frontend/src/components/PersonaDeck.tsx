@@ -3,6 +3,7 @@ import { Agent, ModelProvider, ApiKeyConfig } from '../types';
 import { Plus, Edit2, Trash2, Bot, Cpu, Sparkles, Key, CheckCircle, Upload } from 'lucide-react';
 import { TTS_PROVIDERS, TTS_VOICES } from '../constants';
 import { useSystemConfig } from '../hooks/useSystemConfig';
+import { useVaultKeys } from '../hooks/useVaultKeys';
 import { SearchableSelect } from './SearchableSelect';
 
 interface PersonaDeckProps {
@@ -23,14 +24,44 @@ const PROVIDER_NAMES: Record<ModelProvider, string> = {
   elevenlabs: 'ElevenLabs (TTS)',
 };
 
+// Maps the LLM provider key (used by ModelProvider) to the vault provider
+// key (under which the user stores the API key). Mostly identical except
+// for legacy renames (claude→anthropic, grok→xai). Local needs no key.
+const PROVIDER_TO_VAULT: Record<ModelProvider, string | null> = {
+  gemini: 'gemini',
+  openai: 'openai',
+  claude: 'anthropic',
+  grok: 'xai',
+  openrouter: 'openrouter',
+  local: null,
+  elevenlabs: 'elevenlabs',
+};
+
 export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], onAddAgent, onUpdateAgent, onDeleteAgent }) => {
   const [isEditing, setIsEditing] = useState<boolean>(false);
   const [editingAgent, setEditingAgent] = useState<Partial<Agent>>({});
   const { models } = useSystemConfig();
+  const { keys: vaultKeys, loading: keysLoading } = useVaultKeys();
 
-  // Get all providers - API keys are now managed via vault, not the legacy apiKeys prop
+  // Show only providers the user has a vault key for. Local needs no key
+  // (uses Ollama/LM Studio directly). Always keep the currently-edited
+  // agent's provider visible so an existing persona can still be edited
+  // even if its key was removed. ElevenLabs is TTS-only — never offer it
+  // as an LLM provider. If user has zero LLM keys, fall back to all
+  // (don't lock them out before they've configured anything).
   const getAvailableProviders = (): ModelProvider[] => {
-    return Object.keys(PROVIDER_NAMES) as ModelProvider[];
+    const all = (Object.keys(PROVIDER_NAMES) as ModelProvider[]).filter(p => p !== 'elevenlabs');
+    if (keysLoading) return all;
+    const configured = all.filter(p => {
+      const vaultName = PROVIDER_TO_VAULT[p];
+      return vaultName === null || vaultName in vaultKeys;
+    });
+    if (configured.filter(p => p !== 'local').length === 0) return all;
+    const current = editingAgent.provider;
+    if (current && current !== 'elevenlabs' && !configured.includes(current)) {
+      return [...configured, current];
+    }
+    return configured;
   };
 
   // Legacy function - kept for backward compatibility but always returns true now
@@ -323,8 +354,8 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
               {/* ── SECTION: Model & Voice ── */}
               <div className="bg-nexus-900/50 border border-white/5 rounded-xl p-4 space-y-3">
                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Model & Voice</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-4">
                     <label className="block text-xs text-gray-400 mb-1">Provider</label>
                     <select
                       value={currentProvider}
@@ -336,7 +367,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="col-span-8">
                     <label className="block text-xs text-gray-400 mb-1">Model</label>
                     <SearchableSelect
                       value={editingAgent.modelId || ''}
@@ -347,7 +378,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       groupBy={currentProvider === 'openrouter' || currentProvider === 'local' ? groupByOrg : undefined}
                     />
                   </div>
-                  <div>
+                  <div className="col-span-4">
                     <label className="block text-xs text-gray-400 mb-1">TTS Provider</label>
                     <select
                       value={editingAgent.ttsProvider || 'google'}
@@ -359,7 +390,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="col-span-8">
                     <label className="block text-xs text-gray-400 mb-1">Voice</label>
                     <select
                       value={editingAgent.voiceId || ''}

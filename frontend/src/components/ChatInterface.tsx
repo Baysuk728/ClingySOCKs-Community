@@ -279,7 +279,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
     const audioRef = useRef<HTMLAudioElement | null>(null);
 
     // Error banner state
-    const [chatError, setChatError] = useState<string | null>(null);
+    const [chatError, setChatError] = useState<import('../services/chatApi').ChatStreamError | null>(null);
 
     // Abort controller for stopping streaming
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -724,9 +724,14 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                 if (event.cache_info) setLastCacheInfo(event.cache_info);
                                 break;
                             case 'error':
-                                console.error('Stream error event:', event.error);
-                                setChatError(event.error || 'An unknown error occurred');
-                                setStreamThinking(prev => prev + `\n❌ [Error: ${event.error}]`);
+                                console.error('Stream error event:', event);
+                                setChatError({
+                                    code: event.code ?? 'unknown',
+                                    message: event.message ?? event.error ?? 'Something went wrong.',
+                                    retryable: event.retryable ?? false,
+                                    provider: event.provider,
+                                    model: event.model,
+                                });
                                 break;
                             case 'content_replace':
                                 // Backend detected the model emitted a tool call as raw text.
@@ -754,9 +759,11 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                     },
                     (error) => {
                         console.error('Stream error:', error);
-                        const msg = error?.message || String(error) || 'Connection failed';
-                        setChatError(msg);
-                        setStreamThinking(prev => prev + `\n[Error: ${msg}]`);
+                        setChatError({
+                            code: 'network',
+                            message: "Couldn't reach the chat server. Check your connection and try again.",
+                            retryable: true,
+                        });
                     },
                     {
                         user_id: authUser?.uid, // Pass user ID for User Profile lookup
@@ -1149,7 +1156,28 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                             {chatError && (
                                 <div className="max-w-4xl mx-auto mb-2 px-3 py-2 bg-red-500/15 border border-red-500/30 rounded-lg flex items-start gap-2">
                                     <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-                                    <span className="text-sm text-red-300 flex-1">{chatError}</span>
+                                    <div className="flex-1 min-w-0">
+                                        <div className="text-sm font-semibold text-red-300">
+                                            {chatError.code === 'rate_limit' && 'Rate limit'}
+                                            {chatError.code === 'auth' && 'Authentication error'}
+                                            {chatError.code === 'quota' && 'Quota / billing'}
+                                            {chatError.code === 'context_length' && 'Message too long'}
+                                            {chatError.code === 'unsupported_modality' && 'Unsupported input'}
+                                            {chatError.code === 'model_not_found' && 'Model unavailable'}
+                                            {chatError.code === 'timeout' && 'Timed out'}
+                                            {chatError.code === 'network' && 'Connection problem'}
+                                            {chatError.code === 'bad_request' && 'Bad request'}
+                                            {chatError.code === 'provider_error' && 'Provider error'}
+                                            {chatError.code === 'unknown' && 'Error'}
+                                            {chatError.model && (
+                                                <span className="ml-2 text-[10px] font-mono font-normal text-red-300/70">{chatError.model}</span>
+                                            )}
+                                        </div>
+                                        <p className="text-sm text-red-200/90 leading-snug">{chatError.message}</p>
+                                        {chatError.retryable && (
+                                            <p className="text-[11px] text-red-300/60 mt-0.5">This usually resolves on retry.</p>
+                                        )}
+                                    </div>
                                     <button onClick={() => setChatError(null)} className="text-red-400 hover:text-red-300 shrink-0">
                                         <X className="w-4 h-4" />
                                     </button>

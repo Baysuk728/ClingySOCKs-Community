@@ -59,7 +59,16 @@ _CURATED_MODELS: dict[str, list[str]] = {
         "xai/grok-beta",
     ],
     "openrouter": [
-        # Popular picks — these appear first (pinned) in dropdown
+        # Flagship picks via OpenRouter — pinned so users with ONLY an
+        # OpenRouter key still get the major frontier models in the dropdown.
+        "openrouter/openai/gpt-4o",
+        "openrouter/openai/gpt-4o-mini",
+        "openrouter/anthropic/claude-sonnet-4-5",
+        "openrouter/anthropic/claude-opus-4",
+        "openrouter/google/gemini-2.5-pro",
+        "openrouter/google/gemini-2.5-flash",
+        "openrouter/x-ai/grok-2-1212",
+        # Non-direct provider picks (no equivalent direct API in this app)
         "openrouter/mistralai/mistral-large-2512",
         "openrouter/mistralai/mistral-medium-3.1",
         "openrouter/meta-llama/llama-4-maverick",
@@ -93,9 +102,11 @@ PROVIDER_NAMES: dict[str, str] = {
 # ── Provider API endpoints & config ──────────────────
 
 # ── Gemini filter ─────────────────────────────────────
-# Substrings that mark a Gemini model as NOT a general chat model
+# Substrings that mark a Gemini-API model as NOT a general chat model.
+# Gemma models are intentionally INCLUDED — they're hosted on the
+# Generative Language API and expose generateContent, so they belong
+# in the Gemini provider dropdown (gemma-3-27b-it, gemma-3n-e4b-it, ...).
 _GEMINI_EXCLUDE = (
-    "gemma",          # Gemma open-weight models (not API-hosted chat)
     "-tts",           # TTS-only models
     "-image",         # image-generation-only variants
     "robotics",       # Gemini Robotics ER
@@ -146,9 +157,13 @@ def _openai_chat_filter(m: dict) -> bool:
 
 
 # ── OpenRouter filter ─────────────────────────────────
-# Skip providers we already have direct keys for (duplicates)
-# and filter to text-capable models only.
-_OPENROUTER_DIRECT_PROVIDERS = {"openai", "google", "anthropic", "x-ai", "z-ai"}
+# We deliberately do NOT dedupe vendors a user has direct keys for —
+# a user may prefer to route through OpenRouter (different balance,
+# fallbacks, cost rules) even when a direct key is available.
+# The /models fetch is narrowed to tool-capable models via the
+# `supported_parameters=tools` query param (see _PROVIDER_API_CONFIG),
+# which trims OpenRouter's 300+ list to roughly the ones this app
+# can actually use.
 
 # Niche / roleplay-only orgs we don't need in a general dropdown
 _OPENROUTER_SKIP_ORGS = {
@@ -159,17 +174,12 @@ _OPENROUTER_SKIP_ORGS = {
 
 
 def _openrouter_chat_filter(m: dict) -> bool:
-    """Keep text-gen models from providers not available via direct API keys."""
-    # Must be text-capable
+    """Keep text-gen models, skipping niche roleplay-focused orgs."""
     modality = str(m.get("architecture", {}).get("modality", ""))
     if "text" not in modality:
         return False
     mid = m.get("id", "")
     org = mid.split("/")[0] if "/" in mid else ""
-    # Skip providers we already have direct API access to
-    if org in _OPENROUTER_DIRECT_PROVIDERS:
-        return False
-    # Skip niche roleplay-focused orgs
     if org in _OPENROUTER_SKIP_ORGS:
         return False
     return True
@@ -286,7 +296,9 @@ _PROVIDER_API_CONFIG: dict[str, dict] = {
         "id_field": "id",
         # Only keep text-generation models, skip image/embedding/moderation
         "filter": _openrouter_chat_filter,
-        # No hard limit — smart filter keeps it manageable
+        # Server-side filter to tool-capable models — same trick Letta uses
+        # to cut 300+ models down to the ones agents can actually drive.
+        "extra_params": {"supported_parameters": "tools"},
     },
 }
 
@@ -344,6 +356,10 @@ async def _fetch_provider_models(provider: str) -> list[str]:
             headers["anthropic-version"] = "2023-06-01"
         elif config["auth"] == "query":
             params["key"] = api_key
+
+        extra_params = config.get("extra_params")
+        if extra_params:
+            params.update(extra_params)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(config["url"], headers=headers, params=params)

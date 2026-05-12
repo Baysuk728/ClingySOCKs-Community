@@ -28,29 +28,137 @@ from src.model_registry import get_llm_timeout
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
-def _friendly_error(exc: Exception) -> str:
-    """Convert raw LLM/provider exceptions into user-friendly messages."""
-    msg = str(exc).lower()
-    raw = str(exc)
+_RETRYABLE_CODES = {"rate_limit", "timeout", "network", "provider_error"}
 
-    if "authenticationerror" in msg or "invalid api key" in msg or "api key not valid" in msg:
-        return "API key is invalid or expired. Check your API keys in Settings."
+# Retry-delay hints embedded in upstream error bodies. Google's Gen Lang API
+# returns `"retryDelay": "58s"` + "Please retry in 58.6s"; OpenRouter passes
+# through the underlying provider's HTTP `Retry-After: 30` header in some
+# error envelopes; OpenAI's RateLimitError sometimes carries "retry after Ns".
+import re as _re_for_retry
+_RETRY_AFTER_RE = _re_for_retry.compile(
+    r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"'      # Google JSON
+    r'|retry\s+in\s+(\d+(?:\.\d+)?)\s*s'           # plain text
+    r'|retry[\s_-]*after[:\s=]+(\d+(?:\.\d+)?)',   # HTTP header style
+    _re_for_retry.IGNORECASE,
+)
+
+
+def _extract_retry_after(raw: str) -> Optional[int]:
+    """Pull a retry-after hint (whole seconds) from an upstream error body."""
+    m = _RETRY_AFTER_RE.search(raw)
+    if not m:
+        return None
+    for group in m.groups():
+        if group:
+            try:
+                return max(1, int(round(float(group))))
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _classify_error(exc: Exception) -> dict:
+    """Classify an LLM/provider exception into a structured payload.
+
+    Messages are provider-agnostic; the UI shows the model id alongside.
+    """
+    raw = str(exc)
+    msg = raw.lower()
+    cls = type(exc).__name__
+    retry_after = _extract_retry_after(raw)
+
+    if "ratelimit" in cls.lower() or "rate_limit_exceeded" in msg or "rate limit" in msg or " 429" in msg or "midstreamfallback" in cls.lower() or "resource_exhausted" in msg:
+        text = "Rate limit hit on the upstream provider."
+        if retry_after:
+            text += f" Retry in ~{retry_after}s, or pick a different model."
+        else:
+            text += " Wait a moment and retry, or pick a different model."
+        return {"code": "rate_limit", "message": text, "retry_after": retry_after}
+    if "authentication" in cls.lower() or "invalid api key" in msg or "api key not valid" in msg or "unauthorized" in msg or " 401" in msg:
+        return {
+            "code": "auth",
+            "message": "API key is invalid, expired, or missing. Check your keys in Settings.",
+        }
     if "permission" in msg and "denied" in msg:
-        return "API key doesn't have permission for this model. Check your provider dashboard."
-    if "rate limit" in msg or "ratelimit" in msg or "429" in msg:
-        return "Rate limit exceeded. Wait a moment and try again, or switch to a different model."
-    if "quota" in msg or "insufficient_quota" in msg or "billing" in msg:
-        return "API quota exceeded or billing issue. Check your provider account."
-    if "model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg):
-        return f"Model not available. Try selecting a different model in Settings. ({raw[:120]})"
-    if "timeout" in msg or "timed out" in msg:
-        return "Request timed out. The model may be overloaded — try again or switch models."
-    if "connection" in msg or "connect" in msg:
-        return "Could not connect to the LLM provider. Check your internet connection and API keys."
-    if "context_length" in msg or "too many tokens" in msg or "maximum context" in msg:
-        return "Message too long for this model's context window. Try a shorter message or clear chat history."
-    # Fallback: truncate but keep it somewhat useful
-    return f"Something went wrong: {raw[:200]}"
+        return {
+            "code": "auth",
+            "message": "API key doesn't have permission for this model. Check your provider dashboard.",
+        }
+    if "quota" in msg and ("billing" in msg or "payment" in msg or "plan" in msg) and "per minute" not in msg:
+        return {
+            "code": "quota",
+            "message": "Provider quota exceeded or billing issue. Check your provider account.",
+        }
+    if "insufficient_quota" in msg:
+        return {
+            "code": "quota",
+            "message": "Provider quota exceeded or billing issue. Check your provider account.",
+        }
+    if "contextwindow" in cls.lower() or "context_length" in msg or "context window" in msg or "maximum context" in msg or "too many tokens" in msg:
+        return {
+            "code": "context_length",
+            "message": "Message too long for this model's context window. Shorten the message "
+                       "or clear chat history.",
+        }
+    if "no endpoints found that support image" in msg or "does not support image" in msg or "model does not support images" in msg or ("image" in msg and "not supported" in msg):
+        return {
+            "code": "unsupported_modality",
+            "message": "This model doesn't accept image input. Remove the attached image or "
+                       "pick a multimodal model (e.g. GPT-4o, Claude Sonnet, Gemini).",
+        }
+    if "no endpoints found that support" in msg or "does not support audio" in msg:
+        return {
+            "code": "unsupported_modality",
+            "message": "This model doesn't support that input type. Pick a different model "
+                       "or remove the attachment.",
+        }
+    if "notfound" in cls.lower() or "model_not_found" in msg or ("model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg)):
+        return {
+            "code": "model_not_found",
+            "message": "Model is no longer available. Pick a different model in Settings.",
+        }
+    if "timeout" in cls.lower() or "timeout" in msg or "timed out" in msg:
+        return {
+            "code": "timeout",
+            "message": "Request timed out. The model may be overloaded — retry or switch models.",
+        }
+    if "apiconnection" in cls.lower() or "connection" in msg or "name or service not known" in msg or "dns" in msg:
+        return {
+            "code": "network",
+            "message": "Couldn't reach the LLM provider. Check your connection and try again.",
+        }
+    if "badrequest" in cls.lower() or " 400" in msg:
+        return {
+            "code": "bad_request",
+            "message": f"The provider rejected the request. ({raw[:160]})",
+        }
+    if "provider returned error" in msg or "openrouterexception" in cls.lower() or "vertex_ai" in msg.lower() or "provider_error" in msg:
+        return {
+            "code": "provider_error",
+            "message": "Upstream provider returned an error. Retry or switch models.",
+        }
+    return {
+        "code": "unknown",
+        "message": f"Something went wrong: {raw[:200]}",
+    }
+
+
+def _friendly_error(exc: Exception, *, model: Optional[str] = None) -> dict:
+    """Return a structured error payload suitable for SSE / HTTP responses."""
+    info = _classify_error(exc)
+    provider = None
+    if model and "/" in model:
+        provider = model.split("/", 1)[0]
+    payload = {
+        "code": info["code"],
+        "message": info["message"],
+        "retryable": info["code"] in _RETRYABLE_CODES,
+        "provider": provider,
+        "model": model,
+    }
+    if info.get("retry_after"):
+        payload["retry_after"] = info["retry_after"]
+    return payload
 
 
 def _save_message_to_db(entity_id: str, chat_id: str, sender_id: str, content: str, user_id: str = "unknown", tool_calls=None, tool_results=None, force_id=None):
@@ -671,7 +779,7 @@ async def chat(entity_id: str, req: ChatRequest):
         print(f"❌ CHAT ENDPOINT CRITICAL ERROR: {e}")
         traceback.print_exc()
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=_friendly_error(e))
+        raise HTTPException(status_code=500, detail=_friendly_error(e)["message"])
 
 # ─── Streaming Response (SSE) ────────────────────────
 
@@ -1068,7 +1176,9 @@ def _stream_response(entity_id: str, chat_id: str, kwargs: dict, model: str, too
             print(f"❌ STREAM ERROR: {e}")
             import traceback
             traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'error': _friendly_error(e)})}\n\n"
+            err = _friendly_error(e, model=model)
+            payload = {"type": "error", "error": err["message"], **err}
+            yield f"data: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(
         generate(),
