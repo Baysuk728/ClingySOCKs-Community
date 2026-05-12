@@ -102,9 +102,11 @@ PROVIDER_NAMES: dict[str, str] = {
 # ── Provider API endpoints & config ──────────────────
 
 # ── Gemini filter ─────────────────────────────────────
-# Substrings that mark a Gemini model as NOT a general chat model
+# Substrings that mark a Gemini-API model as NOT a general chat model.
+# Gemma models are intentionally INCLUDED — they're hosted on the
+# Generative Language API and expose generateContent, so they belong
+# in the Gemini provider dropdown (gemma-3-27b-it, gemma-3n-e4b-it, ...).
 _GEMINI_EXCLUDE = (
-    "gemma",          # Gemma open-weight models (not API-hosted chat)
     "-tts",           # TTS-only models
     "-image",         # image-generation-only variants
     "robotics",       # Gemini Robotics ER
