@@ -64,6 +64,18 @@ def _classify_error(exc: Exception) -> dict:
             "message": "Message too long for this model's context window. Shorten the message "
                        "or clear chat history.",
         }
+    if "no endpoints found that support image" in msg or "does not support image" in msg or "model does not support images" in msg or ("image" in msg and "not supported" in msg):
+        return {
+            "code": "unsupported_modality",
+            "message": "This model doesn't accept image input. Remove the attached image or "
+                       "pick a multimodal model (e.g. GPT-4o, Claude Sonnet, Gemini).",
+        }
+    if "no endpoints found that support" in msg or "does not support audio" in msg:
+        return {
+            "code": "unsupported_modality",
+            "message": "This model doesn't support that input type. Pick a different model "
+                       "or remove the attachment.",
+        }
     if "notfound" in cls.lower() or "model_not_found" in msg or ("model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg)):
         return {
             "code": "model_not_found",

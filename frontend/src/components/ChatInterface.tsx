@@ -1162,6 +1162,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                                             {chatError.code === 'auth' && 'Authentication error'}
                                             {chatError.code === 'quota' && 'Quota / billing'}
                                             {chatError.code === 'context_length' && 'Message too long'}
+                                            {chatError.code === 'unsupported_modality' && 'Unsupported input'}
                                             {chatError.code === 'model_not_found' && 'Model unavailable'}
                                             {chatError.code === 'timeout' && 'Timed out'}
                                             {chatError.code === 'network' && 'Connection problem'}
