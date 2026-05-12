@@ -155,16 +155,13 @@ def _openai_chat_filter(m: dict) -> bool:
 
 
 # ── OpenRouter filter ─────────────────────────────────
-# Map OpenRouter org slug → env var of our direct API key for the same vendor.
-# If the user has the direct key, we hide that vendor's models from OpenRouter
-# results to avoid duplicates. If they don't, OpenRouter is their only way to
-# reach those flagship models, so we keep them.
-_OPENROUTER_DIRECT_ORG_TO_ENV = {
-    "openai": "OPENAI_API_KEY",
-    "google": "GEMINI_API_KEY",
-    "anthropic": "ANTHROPIC_API_KEY",
-    "x-ai": "XAI_API_KEY",
-}
+# We deliberately do NOT dedupe vendors a user has direct keys for —
+# a user may prefer to route through OpenRouter (different balance,
+# fallbacks, cost rules) even when a direct key is available.
+# The /models fetch is narrowed to tool-capable models via the
+# `supported_parameters=tools` query param (see _PROVIDER_API_CONFIG),
+# which trims OpenRouter's 300+ list to roughly the ones this app
+# can actually use.
 
 # Niche / roleplay-only orgs we don't need in a general dropdown
 _OPENROUTER_SKIP_ORGS = {
@@ -175,18 +172,12 @@ _OPENROUTER_SKIP_ORGS = {
 
 
 def _openrouter_chat_filter(m: dict) -> bool:
-    """Keep text-gen models, hiding vendors we have a direct key for."""
-    # Must be text-capable
+    """Keep text-gen models, skipping niche roleplay-focused orgs."""
     modality = str(m.get("architecture", {}).get("modality", ""))
     if "text" not in modality:
         return False
     mid = m.get("id", "")
     org = mid.split("/")[0] if "/" in mid else ""
-    # Hide an org only if the user has a direct API key for it
-    direct_env = _OPENROUTER_DIRECT_ORG_TO_ENV.get(org)
-    if direct_env and os.getenv(direct_env, ""):
-        return False
-    # Skip niche roleplay-focused orgs
     if org in _OPENROUTER_SKIP_ORGS:
         return False
     return True
@@ -303,7 +294,9 @@ _PROVIDER_API_CONFIG: dict[str, dict] = {
         "id_field": "id",
         # Only keep text-generation models, skip image/embedding/moderation
         "filter": _openrouter_chat_filter,
-        # No hard limit — smart filter keeps it manageable
+        # Server-side filter to tool-capable models — same trick Letta uses
+        # to cut 300+ models down to the ones agents can actually drive.
+        "extra_params": {"supported_parameters": "tools"},
     },
 }
 
@@ -361,6 +354,10 @@ async def _fetch_provider_models(provider: str) -> list[str]:
             headers["anthropic-version"] = "2023-06-01"
         elif config["auth"] == "query":
             params["key"] = api_key
+
+        extra_params = config.get("extra_params")
+        if extra_params:
+            params.update(extra_params)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(config["url"], headers=headers, params=params)
