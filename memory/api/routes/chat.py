@@ -28,29 +28,86 @@ from src.model_registry import get_llm_timeout
 router = APIRouter(dependencies=[Depends(require_api_key)])
 
 
-def _friendly_error(exc: Exception) -> str:
-    """Convert raw LLM/provider exceptions into user-friendly messages."""
-    msg = str(exc).lower()
-    raw = str(exc)
+_RETRYABLE_CODES = {"rate_limit", "timeout", "network", "provider_error"}
 
-    if "authenticationerror" in msg or "invalid api key" in msg or "api key not valid" in msg:
-        return "API key is invalid or expired. Check your API keys in Settings."
+
+def _classify_error(exc: Exception) -> dict:
+    """Classify an LLM/provider exception into a structured payload."""
+    raw = str(exc)
+    msg = raw.lower()
+    cls = type(exc).__name__
+
+    if "ratelimit" in cls.lower() or "rate_limit_exceeded" in msg or "rate limit" in msg or " 429" in msg or "midstreamfallback" in cls.lower():
+        return {
+            "code": "rate_limit",
+            "message": "Rate limit hit on the upstream provider. Wait a moment and retry, "
+                       "or pick a different model — free-tier models on OpenRouter hit this often.",
+        }
+    if "authentication" in cls.lower() or "invalid api key" in msg or "api key not valid" in msg or "unauthorized" in msg or " 401" in msg:
+        return {
+            "code": "auth",
+            "message": "API key is invalid, expired, or missing. Check your keys in Settings.",
+        }
     if "permission" in msg and "denied" in msg:
-        return "API key doesn't have permission for this model. Check your provider dashboard."
-    if "rate limit" in msg or "ratelimit" in msg or "429" in msg:
-        return "Rate limit exceeded. Wait a moment and try again, or switch to a different model."
-    if "quota" in msg or "insufficient_quota" in msg or "billing" in msg:
-        return "API quota exceeded or billing issue. Check your provider account."
-    if "model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg):
-        return f"Model not available. Try selecting a different model in Settings. ({raw[:120]})"
-    if "timeout" in msg or "timed out" in msg:
-        return "Request timed out. The model may be overloaded — try again or switch models."
-    if "connection" in msg or "connect" in msg:
-        return "Could not connect to the LLM provider. Check your internet connection and API keys."
-    if "context_length" in msg or "too many tokens" in msg or "maximum context" in msg:
-        return "Message too long for this model's context window. Try a shorter message or clear chat history."
-    # Fallback: truncate but keep it somewhat useful
-    return f"Something went wrong: {raw[:200]}"
+        return {
+            "code": "auth",
+            "message": "API key doesn't have permission for this model. Check your provider dashboard.",
+        }
+    if "quota" in msg or "insufficient_quota" in msg or "billing" in msg or "payment" in msg:
+        return {
+            "code": "quota",
+            "message": "Provider quota exceeded or billing issue. Check your provider account.",
+        }
+    if "contextwindow" in cls.lower() or "context_length" in msg or "maximum context" in msg or "too many tokens" in msg:
+        return {
+            "code": "context_length",
+            "message": "Message too long for this model's context window. Shorten the message "
+                       "or clear chat history.",
+        }
+    if "notfound" in cls.lower() or "model_not_found" in msg or ("model" in msg and ("not found" in msg or "does not exist" in msg or "not available" in msg)):
+        return {
+            "code": "model_not_found",
+            "message": "Model is no longer available. Pick a different model in Settings.",
+        }
+    if "timeout" in cls.lower() or "timeout" in msg or "timed out" in msg:
+        return {
+            "code": "timeout",
+            "message": "Request timed out. The model may be overloaded — retry or switch models.",
+        }
+    if "apiconnection" in cls.lower() or "connection" in msg or "name or service not known" in msg or "dns" in msg:
+        return {
+            "code": "network",
+            "message": "Couldn't reach the LLM provider. Check your connection and try again.",
+        }
+    if "badrequest" in cls.lower() or " 400" in msg:
+        return {
+            "code": "bad_request",
+            "message": f"The provider rejected the request. ({raw[:160]})",
+        }
+    if "provider returned error" in msg or "openrouterexception" in cls.lower() or "provider_error" in msg:
+        return {
+            "code": "provider_error",
+            "message": f"Upstream provider returned an error. Retry or switch models. ({raw[:160]})",
+        }
+    return {
+        "code": "unknown",
+        "message": f"Something went wrong: {raw[:200]}",
+    }
+
+
+def _friendly_error(exc: Exception, *, model: Optional[str] = None) -> dict:
+    """Return a structured error payload suitable for SSE / HTTP responses."""
+    info = _classify_error(exc)
+    provider = None
+    if model and "/" in model:
+        provider = model.split("/", 1)[0]
+    return {
+        "code": info["code"],
+        "message": info["message"],
+        "retryable": info["code"] in _RETRYABLE_CODES,
+        "provider": provider,
+        "model": model,
+    }
 
 
 def _save_message_to_db(entity_id: str, chat_id: str, sender_id: str, content: str, user_id: str = "unknown", tool_calls=None, tool_results=None, force_id=None):
@@ -671,7 +728,7 @@ async def chat(entity_id: str, req: ChatRequest):
         print(f"❌ CHAT ENDPOINT CRITICAL ERROR: {e}")
         traceback.print_exc()
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=_friendly_error(e))
+        raise HTTPException(status_code=500, detail=_friendly_error(e)["message"])
 
 # ─── Streaming Response (SSE) ────────────────────────
 
@@ -1068,7 +1125,9 @@ def _stream_response(entity_id: str, chat_id: str, kwargs: dict, model: str, too
             print(f"❌ STREAM ERROR: {e}")
             import traceback
             traceback.print_exc()
-            yield f"data: {json.dumps({'type': 'error', 'error': _friendly_error(e)})}\n\n"
+            err = _friendly_error(e, model=model)
+            payload = {"type": "error", "error": err["message"], **err}
+            yield f"data: {json.dumps(payload)}\n\n"
 
     return StreamingResponse(
         generate(),

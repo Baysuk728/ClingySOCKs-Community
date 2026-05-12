@@ -32,6 +32,19 @@ export interface ChatStreamEvent {
     };
     done?: boolean;
     error?: string;
+    // Structured error fields (sent alongside `error` for the 'error' event)
+    code?: 'rate_limit' | 'auth' | 'quota' | 'context_length' | 'model_not_found' | 'timeout' | 'network' | 'bad_request' | 'provider_error' | 'unknown';
+    message?: string;
+    retryable?: boolean;
+    provider?: string;
+}
+
+export interface ChatStreamError {
+    code: NonNullable<ChatStreamEvent['code']>;
+    message: string;
+    retryable: boolean;
+    provider?: string;
+    model?: string;
 }
 
 export const chatApi = {
