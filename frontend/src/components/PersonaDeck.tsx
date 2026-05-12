@@ -323,8 +323,8 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
               {/* ── SECTION: Model & Voice ── */}
               <div className="bg-nexus-900/50 border border-white/5 rounded-xl p-4 space-y-3">
                 <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Model & Voice</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
+                <div className="grid grid-cols-12 gap-3">
+                  <div className="col-span-4">
                     <label className="block text-xs text-gray-400 mb-1">Provider</label>
                     <select
                       value={currentProvider}
@@ -336,7 +336,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="col-span-8">
                     <label className="block text-xs text-gray-400 mb-1">Model</label>
                     <SearchableSelect
                       value={editingAgent.modelId || ''}
@@ -347,7 +347,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       groupBy={currentProvider === 'openrouter' || currentProvider === 'local' ? groupByOrg : undefined}
                     />
                   </div>
-                  <div>
+                  <div className="col-span-4">
                     <label className="block text-xs text-gray-400 mb-1">TTS Provider</label>
                     <select
                       value={editingAgent.ttsProvider || 'google'}
@@ -359,7 +359,7 @@ export const PersonaDeck: React.FC<PersonaDeckProps> = ({ agents, apiKeys = [], 
                       ))}
                     </select>
                   </div>
-                  <div>
+                  <div className="col-span-8">
                     <label className="block text-xs text-gray-400 mb-1">Voice</label>
                     <select
                       value={editingAgent.voiceId || ''}
