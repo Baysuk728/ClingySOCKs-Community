@@ -4,7 +4,7 @@
 ### Relational memory engine for AI agents
 
 [![Deploy on Railway](https://img.shields.io/badge/Railway-Deploy_on_Railway-9524f2?style=flat&logo=railway&logoColor=white)](https://railway.com/deploy/clingysocks?referralCode=FeqUUU&utm_medium=integration&utm_source=template&utm_campaign=generic)
-[![Discord](https://img.shields.io/badge/Discord-Join_Community-7289da?style=flat&logo=discord&logoColor=white)](https://discord.gg/Us7vyUf3)
+[![Discord](https://img.shields.io/badge/Discord-Join_Community-7289da?style=flat&logo=discord&logoColor=white)](https://discord.gg/5Vx3EDX7gA)
 [![Support the dev](https://img.shields.io/badge/Support_The_Dev-Donate-FFDD00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/clingy.socks)
 
 > **Disclaimer:** ClingySOCKs is an experimental research project exploring persistent memory for AI agents. It is **not** a mental health tool, therapeutic service, or substitute for human relationships. Use responsibly and at your own risk.
