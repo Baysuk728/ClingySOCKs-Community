@@ -30,19 +30,50 @@ router = APIRouter(dependencies=[Depends(require_api_key)])
 
 _RETRYABLE_CODES = {"rate_limit", "timeout", "network", "provider_error"}
 
+# Retry-delay hints embedded in upstream error bodies. Google's Gen Lang API
+# returns `"retryDelay": "58s"` + "Please retry in 58.6s"; OpenRouter passes
+# through the underlying provider's HTTP `Retry-After: 30` header in some
+# error envelopes; OpenAI's RateLimitError sometimes carries "retry after Ns".
+import re as _re_for_retry
+_RETRY_AFTER_RE = _re_for_retry.compile(
+    r'"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"'      # Google JSON
+    r'|retry\s+in\s+(\d+(?:\.\d+)?)\s*s'           # plain text
+    r'|retry[\s_-]*after[:\s=]+(\d+(?:\.\d+)?)',   # HTTP header style
+    _re_for_retry.IGNORECASE,
+)
+
+
+def _extract_retry_after(raw: str) -> Optional[int]:
+    """Pull a retry-after hint (whole seconds) from an upstream error body."""
+    m = _RETRY_AFTER_RE.search(raw)
+    if not m:
+        return None
+    for group in m.groups():
+        if group:
+            try:
+                return max(1, int(round(float(group))))
+            except (TypeError, ValueError):
+                pass
+    return None
+
 
 def _classify_error(exc: Exception) -> dict:
-    """Classify an LLM/provider exception into a structured payload."""
+    """Classify an LLM/provider exception into a structured payload.
+
+    Messages are provider-agnostic; the UI shows the model id alongside.
+    """
     raw = str(exc)
     msg = raw.lower()
     cls = type(exc).__name__
+    retry_after = _extract_retry_after(raw)
 
-    if "ratelimit" in cls.lower() or "rate_limit_exceeded" in msg or "rate limit" in msg or " 429" in msg or "midstreamfallback" in cls.lower():
-        return {
-            "code": "rate_limit",
-            "message": "Rate limit hit on the upstream provider. Wait a moment and retry, "
-                       "or pick a different model — free-tier models on OpenRouter hit this often.",
-        }
+    if "ratelimit" in cls.lower() or "rate_limit_exceeded" in msg or "rate limit" in msg or " 429" in msg or "midstreamfallback" in cls.lower() or "resource_exhausted" in msg:
+        text = "Rate limit hit on the upstream provider."
+        if retry_after:
+            text += f" Retry in ~{retry_after}s, or pick a different model."
+        else:
+            text += " Wait a moment and retry, or pick a different model."
+        return {"code": "rate_limit", "message": text, "retry_after": retry_after}
     if "authentication" in cls.lower() or "invalid api key" in msg or "api key not valid" in msg or "unauthorized" in msg or " 401" in msg:
         return {
             "code": "auth",
@@ -53,12 +84,17 @@ def _classify_error(exc: Exception) -> dict:
             "code": "auth",
             "message": "API key doesn't have permission for this model. Check your provider dashboard.",
         }
-    if "quota" in msg or "insufficient_quota" in msg or "billing" in msg or "payment" in msg:
+    if "quota" in msg and ("billing" in msg or "payment" in msg or "plan" in msg) and "per minute" not in msg:
         return {
             "code": "quota",
             "message": "Provider quota exceeded or billing issue. Check your provider account.",
         }
-    if "contextwindow" in cls.lower() or "context_length" in msg or "maximum context" in msg or "too many tokens" in msg:
+    if "insufficient_quota" in msg:
+        return {
+            "code": "quota",
+            "message": "Provider quota exceeded or billing issue. Check your provider account.",
+        }
+    if "contextwindow" in cls.lower() or "context_length" in msg or "context window" in msg or "maximum context" in msg or "too many tokens" in msg:
         return {
             "code": "context_length",
             "message": "Message too long for this model's context window. Shorten the message "
@@ -96,10 +132,10 @@ def _classify_error(exc: Exception) -> dict:
             "code": "bad_request",
             "message": f"The provider rejected the request. ({raw[:160]})",
         }
-    if "provider returned error" in msg or "openrouterexception" in cls.lower() or "provider_error" in msg:
+    if "provider returned error" in msg or "openrouterexception" in cls.lower() or "vertex_ai" in msg.lower() or "provider_error" in msg:
         return {
             "code": "provider_error",
-            "message": f"Upstream provider returned an error. Retry or switch models. ({raw[:160]})",
+            "message": "Upstream provider returned an error. Retry or switch models.",
         }
     return {
         "code": "unknown",
@@ -113,13 +149,16 @@ def _friendly_error(exc: Exception, *, model: Optional[str] = None) -> dict:
     provider = None
     if model and "/" in model:
         provider = model.split("/", 1)[0]
-    return {
+    payload = {
         "code": info["code"],
         "message": info["message"],
         "retryable": info["code"] in _RETRYABLE_CODES,
         "provider": provider,
         "model": model,
     }
+    if info.get("retry_after"):
+        payload["retry_after"] = info["retry_after"]
+    return payload
 
 
 def _save_message_to_db(entity_id: str, chat_id: str, sender_id: str, content: str, user_id: str = "unknown", tool_calls=None, tool_results=None, force_id=None):
