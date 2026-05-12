@@ -59,7 +59,16 @@ _CURATED_MODELS: dict[str, list[str]] = {
         "xai/grok-beta",
     ],
     "openrouter": [
-        # Popular picks — these appear first (pinned) in dropdown
+        # Flagship picks via OpenRouter — pinned so users with ONLY an
+        # OpenRouter key still get the major frontier models in the dropdown.
+        "openrouter/openai/gpt-4o",
+        "openrouter/openai/gpt-4o-mini",
+        "openrouter/anthropic/claude-sonnet-4-5",
+        "openrouter/anthropic/claude-opus-4",
+        "openrouter/google/gemini-2.5-pro",
+        "openrouter/google/gemini-2.5-flash",
+        "openrouter/x-ai/grok-2-1212",
+        # Non-direct provider picks (no equivalent direct API in this app)
         "openrouter/mistralai/mistral-large-2512",
         "openrouter/mistralai/mistral-medium-3.1",
         "openrouter/meta-llama/llama-4-maverick",
@@ -146,9 +155,16 @@ def _openai_chat_filter(m: dict) -> bool:
 
 
 # ── OpenRouter filter ─────────────────────────────────
-# Skip providers we already have direct keys for (duplicates)
-# and filter to text-capable models only.
-_OPENROUTER_DIRECT_PROVIDERS = {"openai", "google", "anthropic", "x-ai", "z-ai"}
+# Map OpenRouter org slug → env var of our direct API key for the same vendor.
+# If the user has the direct key, we hide that vendor's models from OpenRouter
+# results to avoid duplicates. If they don't, OpenRouter is their only way to
+# reach those flagship models, so we keep them.
+_OPENROUTER_DIRECT_ORG_TO_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "x-ai": "XAI_API_KEY",
+}
 
 # Niche / roleplay-only orgs we don't need in a general dropdown
 _OPENROUTER_SKIP_ORGS = {
@@ -159,15 +175,16 @@ _OPENROUTER_SKIP_ORGS = {
 
 
 def _openrouter_chat_filter(m: dict) -> bool:
-    """Keep text-gen models from providers not available via direct API keys."""
+    """Keep text-gen models, hiding vendors we have a direct key for."""
     # Must be text-capable
     modality = str(m.get("architecture", {}).get("modality", ""))
     if "text" not in modality:
         return False
     mid = m.get("id", "")
     org = mid.split("/")[0] if "/" in mid else ""
-    # Skip providers we already have direct API access to
-    if org in _OPENROUTER_DIRECT_PROVIDERS:
+    # Hide an org only if the user has a direct API key for it
+    direct_env = _OPENROUTER_DIRECT_ORG_TO_ENV.get(org)
+    if direct_env and os.getenv(direct_env, ""):
         return False
     # Skip niche roleplay-focused orgs
     if org in _OPENROUTER_SKIP_ORGS:
