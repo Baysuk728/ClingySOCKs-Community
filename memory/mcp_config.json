@@ -6,6 +6,12 @@
                 "./McpServers/FileSystemMCP.py"
             ]
         },
+        "WebSearchMCP": {
+            "command": "python",
+            "args": [
+                "./McpServers/WebSearchMCP.py"
+            ]
+        },
         "MemoryMCP": {
             "command": "python",
             "args": [
