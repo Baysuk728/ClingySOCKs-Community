@@ -95,11 +95,12 @@ async def lifespan(app: FastAPI):
         print("⚠️  App started WITHOUT a database — configure one in Settings")
 
     # ── MCP Clients ───────────────────────────────────
-    mcp_manager = None
-    if has_feature(Feature.SOCIAL_MCP) or has_feature(Feature.WEB_SEARCH_MCP) or has_feature(Feature.MEDIA_MCP):
-        from src.integrations.mcp_client import mcp_manager
-        print("🔌 Initializing MCP Clients...")
-        await mcp_manager.connect_all()
+    # Community ships only core/free MCP servers (FileSystem, WebSearch,
+    # Memory). Connect them at boot so their tools are warm and any
+    # connection failure surfaces at startup instead of on first use.
+    from src.integrations.mcp_client import mcp_manager
+    print("🔌 Initializing MCP Clients...")
+    await mcp_manager.connect_all()
 
     # ── Heartbeat System ──────────────────────────────
     heartbeat_mgr = None
