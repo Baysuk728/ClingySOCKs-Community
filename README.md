@@ -86,6 +86,25 @@ ClingySOCKs supports local LLM inference via Ollama or any OpenAI-compatible ser
 
 3. Restart the backend — "Local (Ollama / LM Studio)" will appear as a provider in the persona editor with your downloaded models auto-discovered.
 
+## Web Search (Optional)
+
+Your agent can search the web and read pages through the built-in **WebSearchMCP** tool. It's enabled by default — you just need a search provider key.
+
+1. Pick a provider and get an API key. [Exa](https://exa.ai) is recommended (semantic search, built for AI agents); [Tavily](https://tavily.com), [Brave Search](https://brave.com/search/api/), and [SerpAPI](https://serpapi.com) also work.
+
+2. Add **one** provider key to `memory/.env`:
+   ```env
+   SEARCH_PROVIDER=exa          # exa | tavily | brave | serpapi
+   EXA_API_KEY=your-exa-key
+   # TAVILY_API_KEY=your-tavily-key
+   # BRAVE_SEARCH_API_KEY=your-brave-key
+   # SERPAPI_KEY=your-serpapi-key
+   ```
+
+3. Restart the backend. Your agent can now use `web_search` and `fetch_webpage` on its own.
+
+> **No key?** Reading a specific page (`fetch_webpage`) still works without one — only `web_search` needs a provider key.
+
 ## Production Security
 
 In development, fallback secrets are used automatically. For production, set these in `memory/.env`:
