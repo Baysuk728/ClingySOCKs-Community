@@ -12,13 +12,18 @@ Ties together the full pipeline:
 """
 
 import asyncio
+import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Optional
 
 from rich.console import Console
 
-from src.config import MAX_CHUNK_CHARS, EMBEDDINGS_ENABLED
+from src.config import (
+    MAX_CHUNK_CHARS, EMBEDDINGS_ENABLED,
+    NARRATIVE_MODEL, EXTRACTION_MODEL, SYNTHESIS_MODEL,
+    ECHO_ENABLED, FACTUAL_ENABLED,
+)
 from src.db.models import (
     Entity, Conversation, Message, PersonaIdentity, Lexicon,
     EmotionalPattern, RepairPattern, StateNeed, LifeEvent, Artifact,
@@ -43,6 +48,130 @@ from src.pipeline.embeddings import embed_entity_memories
 from src.pipeline.cross_agent_linker import link_cross_agent_entities
 
 console = Console()
+
+
+def _is_infra_error(exc: Exception | None) -> bool:
+    """True for errors meaning the database can't accept writes right now —
+    a full disk, a down/unreachable DB, or read-only mode. When one of these
+    occurs, retrying the remaining conversations in this run is pointless, so
+    the harvester aborts and lets the operator fix the infrastructure.
+    """
+    if exc is None:
+        return False
+    try:
+        from src.db.session import DatabaseUnavailableError, DatabaseNotConfiguredError
+        if isinstance(exc, (DatabaseUnavailableError, DatabaseNotConfiguredError)):
+            return True
+    except Exception:
+        pass
+    low = str(exc).lower()
+    markers = (
+        "no space left", "could not extend", "disk full", "diskfull",
+        "temporarily unavailable", "could not connect", "connection refused",
+        "server closed the connection", "read-only sql transaction",
+        "no database configured",
+    )
+    return any(m in low for m in markers)
+
+
+def _preflight_db_check() -> tuple[bool, str]:
+    """Verify the database is reachable AND can commit a write before starting a
+    long harvest. Catches a full disk / down DB up front instead of grinding
+    through every conversation with rollback tracebacks.
+
+    The probe upserts a single row into a tiny table: committing it forces a WAL
+    flush to disk, so a full disk surfaces now. Returns (ok, human_readable_reason).
+    """
+    from sqlalchemy import text
+    try:
+        with get_session() as session:
+            session.execute(text("SELECT 1"))
+            session.execute(text(
+                "CREATE TABLE IF NOT EXISTS harvest_preflight "
+                "(id integer PRIMARY KEY, checked_at timestamptz)"
+            ))
+            session.execute(text(
+                "INSERT INTO harvest_preflight (id, checked_at) VALUES (1, now()) "
+                "ON CONFLICT (id) DO UPDATE SET checked_at = excluded.checked_at"
+            ))
+            # get_session() commits on clean exit → forces a WAL fsync to disk.
+        return True, ""
+    except Exception as exc:
+        low = str(exc).lower()
+        if "no space left" in low or "could not extend" in low or "diskfull" in low:
+            hint = ("The database disk is FULL. Free space on the Postgres host, "
+                    "then restart Postgres before re-running.")
+        elif "read-only" in low:
+            hint = ("The database is read-only — usually a side effect of a full "
+                    "disk. Free space and restart Postgres.")
+        elif _is_infra_error(exc):
+            hint = ("The database is unreachable. Check the Postgres service and "
+                    "your connection, then re-run.")
+        else:
+            hint = "The database rejected a test write."
+        return False, f"{hint}\n   Detail: {str(exc)[:300]}"
+
+
+async def resolve_harvest_plan(entity_id: str, owner_user_id: str | None) -> dict:
+    """Decide which models + key the harvest will use for this entity.
+
+    Harvest is structured extraction — it doesn't need the flagship chat model.
+    So we derive a CHEAP harvest model from the persona's chat PROVIDER and reuse
+    the key chat already resolved (BYOK vault or server env). This means:
+      • zero configuration — the user only ever picks a chat model;
+      • cheap by default — gpt-4o → gpt-4o-mini, etc.;
+      • fail-proof — if chat works, harvest works (same provider, same key).
+
+    Explicit NARRATIVE_MODEL / EXTRACTION_MODEL / SYNTHESIS_MODEL env vars still
+    win, for power users who want to pin a model. Local chat models reuse
+    themselves (free, key-less).
+
+    Returns {"narrative","extraction","synthesis","api_key","chat_provider"}.
+    """
+    from src.model_registry import provider_from_model, get_harvest_model, is_local_model
+
+    chat_model = None
+    api_key = None
+    try:
+        from src.persona_config import aload_persona_config
+        cfg = await aload_persona_config(entity_id, user_id=owner_user_id)
+        chat_model = cfg.model
+        api_key = cfg.api_key  # BYOK key if resolved from vault; else None (env)
+    except Exception as e:
+        console.print(f"   ⚠️ Could not load persona config ({str(e)[:120]}); using global harvest defaults")
+
+    if chat_model and is_local_model(chat_model):
+        # Local chat → reuse the same local model for harvest (free, no key).
+        chat_provider = "local"
+        auto = chat_model
+    elif chat_model:
+        chat_provider = provider_from_model(chat_model) or "gemini"
+        auto = get_harvest_model(chat_provider)
+    else:
+        # No persona model resolvable — fall back to the global config default.
+        chat_provider = provider_from_model(NARRATIVE_MODEL)
+        auto = NARRATIVE_MODEL
+
+    plan = {
+        "narrative": os.getenv("NARRATIVE_MODEL") or auto,
+        "extraction": os.getenv("EXTRACTION_MODEL") or auto,
+        "synthesis": os.getenv("SYNTHESIS_MODEL") or auto,
+        "api_key": api_key,
+        "chat_provider": chat_provider,
+    }
+    return plan
+
+
+def _harvest_overrides(model_id: str, plan: dict) -> dict | None:
+    """Per-pass litellm overrides. Inject the resolved chat key only when the
+    harvest model is the SAME provider as chat (the default case). For a power
+    user who pinned a different-provider model via env, fall back to env/vault
+    auto-pickup instead of sending a mismatched key.
+    """
+    from src.model_registry import provider_from_model
+    if plan.get("api_key") and provider_from_model(model_id) == plan.get("chat_provider"):
+        return {"api_key": plan["api_key"]}
+    return None
 
 
 def _update_harvest_progress(
@@ -246,34 +375,66 @@ async def harvest_entity(
         "errors": [],
     }
 
+    # Pre-flight: confirm the DB can actually accept a write before we start.
+    # Fails fast on a full disk / down DB instead of erroring on every conversation.
+    ok, reason = _preflight_db_check()
+    if not ok:
+        console.print("❌ [bold red]Pre-flight DB check failed — aborting before processing any conversations.[/bold red]")
+        console.print(f"   {reason}\n")
+        stats["errors"].append(f"preflight: {reason}")
+        _update_harvest_progress(entity_id, status="error", error_message=f"Pre-flight DB check failed: {reason}")
+        return stats
+
     # Pre-fetch conversation IDs to avoid keeping session open
     _update_harvest_progress(entity_id, status="processing", current_step="Analyzing Conversations...", progress_percent=5)
-    
+
     conversations_metadata = []
+    owner_user_id = None
     with get_session() as session:
         # Load entity
         entity = session.get(Entity, entity_id)
         if not entity:
             console.print(f"❌ Entity {entity_id} not found")
             return stats
-            
+        # Capture the owner now (plain value) — used for BYOK key resolution.
+        owner_user_id = entity.owner_user_id
+
         # Determine conversations to process
         query = session.query(Conversation).filter(Conversation.entity_id == entity_id)
         if conversation_ids:
             query = query.filter(Conversation.id.in_(conversation_ids))
         else:
-            # Default: pending OR error OR has unharvested messages, then oldest updated
-            # We retry errors automatically on next run
+            # Default: pending OR error OR has genuinely unharvested messages.
+            # NOTE: message_index is 0-based and last_harvested_index holds the
+            # index of the last harvested message (default -1). A conversation is
+            # fully harvested when last_harvested_index == message_count - 1, so
+            # "has unharvested messages" is message_count > last_harvested_index + 1.
+            # The old `message_count > last_harvested_index` was off by one and
+            # re-selected every finished conversation on every run.
             from sqlalchemy import or_
             query = query.filter(or_(
                 Conversation.harvest_status.in_(["pending", "error"]),
-                Conversation.message_count > Conversation.last_harvested_index
+                Conversation.message_count > Conversation.last_harvested_index + 1
             )).order_by(Conversation.created_at.asc())
-            
+
         convs = query.all()
         # Cache minimal data needed for the loop
         conversations_metadata = [{"id": c.id, "title": c.title, "message_count": c.message_count or 0} for c in convs]
-        
+
+    # Decide which (cheap) models + key this harvest uses, derived from the
+    # persona's chat provider. Reuses the working chat key; cheap by default.
+    plan = await resolve_harvest_plan(entity_id, owner_user_id)
+    _narr_model, _extr_model, _synth_model = plan["narrative"], plan["extraction"], plan["synthesis"]
+    _narr_ov = _harvest_overrides(_narr_model, plan)
+    _extr_ov = _harvest_overrides(_extr_model, plan)
+    _synth_ov = _harvest_overrides(_synth_model, plan)
+
+    # Surface the resolved models so it's obvious which provider/route is in use.
+    console.print(
+        f"   Models — narrative: [cyan]{_narr_model}[/cyan] | "
+        f"data: [cyan]{_extr_model}[/cyan] | synthesis: [cyan]{_synth_model}[/cyan]"
+        f"{'  [dim](BYOK key)[/dim]' if plan.get('api_key') else ''}"
+    )
     console.print(f"📋 Found {len(conversations_metadata)} conversations to process\n")
     
     # Total estimate (chunks)
@@ -321,7 +482,7 @@ async def harvest_entity(
                         stats["chunks_processed"] += 1
 
                         # Retry factual extraction if it didn't complete last time
-                        if not _checkpoint_factual_complete(cp):
+                        if FACTUAL_ENABLED and not _checkpoint_factual_complete(cp):
                             rebuilt_chunk = _rebuild_chunk_from_checkpoint(session, conv.id, cp)
                             if rebuilt_chunk:
                                 console.print(f"   🔁 Re-running factual extraction for chunk {cp.chunk_order}")
@@ -336,6 +497,8 @@ async def harvest_entity(
                                     user_name=user_name,
                                     narrative_context=narrative_ctx,
                                     source_message_id=first_msg_id,
+                                    model=_extr_model,
+                                    llm_overrides=_extr_ov,
                                 )
                                 stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
                                 stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
@@ -399,6 +562,8 @@ async def harvest_entity(
                         rolling_context=context_window.current_context,
                         existing_memory_brief=existing_memory,
                         chunk_order=chunk.chunk_order,
+                        model=_narr_model,
+                        llm_overrides=_narr_ov,
                     )
                     stats["pass1_calls"] += 1
 
@@ -409,17 +574,23 @@ async def harvest_entity(
                         agent_name=agent_name,
                         user_name=user_name,
                         existing_lexicon_terms=context_window.get_known_lexicon_terms(),
+                        model=_extr_model,
+                        llm_overrides=_extr_ov,
                     )
                     stats["pass2_calls"] += 1
 
-                    # Echo Pass (Dreams)
-                    dreams = await run_echo_pass(
-                        chunk=chunk,
-                        rolling_context=result.rolling_summary,
-                        agent_name=agent_name,
-                        user_name=user_name,
-                    )
-                    result.echo_dreams = dreams
+                    # Echo Pass (Dreams) — only fires an LLM call on a silence
+                    # gap; gate off entirely via ECHO_ENABLED for a cheaper run.
+                    if ECHO_ENABLED:
+                        dreams = await run_echo_pass(
+                            chunk=chunk,
+                            rolling_context=result.rolling_summary,
+                            agent_name=agent_name,
+                            user_name=user_name,
+                            model=_narr_model,
+                            llm_overrides=_narr_ov,
+                        )
+                        result.echo_dreams = dreams
 
                     # Add to context window
                     context_window.add_result(result)
@@ -441,33 +612,39 @@ async def harvest_entity(
                     session.commit()
                     console.print(f"   💾 Checkpointed chunk {chunk.chunk_order} ({first_idx}→{last_idx})")
 
-                    # Factual entity extraction
-                    chunk_text_factual = format_chunk_for_llm(chunk, agent_name)
-                    narrative_ctx = result.rolling_summary
-                    first_msg_id = chunk.messages[0].id if chunk.messages else None
+                    # Factual entity extraction (an extra billed LLM call per
+                    # chunk) — gate off via FACTUAL_ENABLED. When disabled we
+                    # leave the checkpoint's factual flag unset so a later run
+                    # with it re-enabled can backfill it.
+                    if FACTUAL_ENABLED:
+                        chunk_text_factual = format_chunk_for_llm(chunk, agent_name)
+                        narrative_ctx = result.rolling_summary
+                        first_msg_id = chunk.messages[0].id if chunk.messages else None
 
-                    factual_stats = await run_factual_extraction(
-                        entity_id=entity_id,
-                        session=session,
-                        chunk_text=chunk_text_factual,
-                        agent_name=agent_name,
-                        user_name=user_name,
-                        narrative_context=narrative_ctx,
-                        source_message_id=first_msg_id,
-                    )
-                    stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
-                    stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
-                    stats["edges_created"] += factual_stats.get("edges_created", 0)
+                        factual_stats = await run_factual_extraction(
+                            entity_id=entity_id,
+                            session=session,
+                            chunk_text=chunk_text_factual,
+                            agent_name=agent_name,
+                            user_name=user_name,
+                            narrative_context=narrative_ctx,
+                            source_message_id=first_msg_id,
+                            model=_extr_model,
+                            llm_overrides=_extr_ov,
+                        )
+                        stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
+                        stats["factual_entities_updated"] += factual_stats.get("entities_updated", 0)
+                        stats["edges_created"] += factual_stats.get("edges_created", 0)
 
-                    # Mark factual extraction complete in checkpoint
-                    cp_row = (
-                        session.query(HarvestChunkCheckpoint)
-                        .filter_by(entity_id=entity_id, conversation_id=conv.id, chunk_order=chunk.chunk_order)
-                        .first()
-                    )
-                    if cp_row:
-                        _mark_checkpoint_factual_complete(cp_row)
-                        session.commit()
+                        # Mark factual extraction complete in checkpoint
+                        cp_row = (
+                            session.query(HarvestChunkCheckpoint)
+                            .filter_by(entity_id=entity_id, conversation_id=conv.id, chunk_order=chunk.chunk_order)
+                            .first()
+                        )
+                        if cp_row:
+                            _mark_checkpoint_factual_complete(cp_row)
+                            session.commit()
 
                     # Update live progress
                     chunks_processed_total += 1
@@ -484,6 +661,8 @@ async def harvest_entity(
                     existing_narratives=existing_narratives,
                     agent_name=agent_name,
                     user_name=user_name,
+                    model=_synth_model,
+                    llm_overrides=_synth_ov,
                 )
                 stats["synthesis_calls"] += 1
 
@@ -499,6 +678,8 @@ async def harvest_entity(
                         entity_id=entity_id,
                         session=session,
                         synthesis_arcs=synthesis_result.get("detected_arcs", []),
+                        model=_extr_model,
+                        llm_overrides=_extr_ov,
                     )
                     stats["edges_created"] += edge_stats.get("edges_created", 0)
                     stats["arcs_created"] += edge_stats.get("arcs_created", 0)
@@ -533,7 +714,7 @@ async def harvest_entity(
                         messages_from=messages[0].message_index if messages else 0,
                         messages_to=messages[-1].message_index if messages else 0,
                         message_count=len(messages),
-                        llm_used="gemini",
+                        llm_used=_narr_model,
                         items_extracted=stored,
                         success=True,
                     )
@@ -562,7 +743,16 @@ async def harvest_entity(
                 session.rollback()
                 error_msg = str(e)
                 stats["errors"].append(f"{conv_metadata.get('title', conv_metadata['id'])}: {error_msg}")
-                
+
+                # Infrastructure failure (full disk / DB down / read-only): retrying
+                # the rest of the run is pointless and just spews tracebacks. Stop
+                # now — committed chunk checkpoints mean the next run resumes here.
+                if _is_infra_error(e):
+                    console.print("🛑 [bold red]Database/disk unavailable — aborting the rest of the run.[/bold red]")
+                    console.print("   Fix the DB (free disk / restart Postgres), then re-run — harvest resumes from the last checkpoint.\n")
+                    _update_harvest_progress(entity_id, status="error", error_message=f"DB/disk unavailable: {error_msg[:200]}")
+                    break
+
                 if "429" in error_msg or "Resource exhausted" in error_msg:
                     console.print(f"   ⏳ Rate Limit Hit. Sleeping 60s...")
                     await asyncio.sleep(60)
@@ -572,7 +762,7 @@ async def harvest_entity(
                     console.print(f"   ❌ Error: {e}\n")
                     import traceback
                     traceback.print_exc()
-                
+
                 try:
                     # New session for error logging to ensure clean state
                     with get_session() as err_session:

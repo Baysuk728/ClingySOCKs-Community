@@ -10,12 +10,12 @@ Uses entity resolution to prevent duplicates.
 """
 
 import re
-import litellm
-
 from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE, MAX_OUTPUT_TOKENS,
+    FACTUAL_DEDUP_HINT_LIMIT,
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.db.models import FactualEntity, Edge
 from src.prompts.factual import (
     build_factual_prompt, FACTUAL_SYSTEM_INSTRUCTION,
@@ -65,6 +65,8 @@ async def run_factual_extraction(
     user_name: str,
     narrative_context: str = "",
     source_message_id: str | None = None,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> dict:
     """
     Extract factual entities and relationships from conversation text.
@@ -96,9 +98,20 @@ async def run_factual_extraction(
         .filter_by(entity_id=entity_id)
         .all()
     )
+    # Code-side entity resolution below uses ALL existing entities (no token
+    # cost). The dedup HINT we inject into the prompt, however, is capped to the
+    # most-mentioned entities so the input doesn't grow unboundedly as the graph
+    # gets large. Lowering FACTUAL_DEDUP_HINT_LIMIT trims cost; the in-code
+    # resolution still prevents duplicates regardless.
+    if FACTUAL_DEDUP_HINT_LIMIT and FACTUAL_DEDUP_HINT_LIMIT > 0:
+        hint_entities = sorted(
+            existing, key=lambda e: (getattr(e, "mention_count", 0) or 0), reverse=True
+        )[:FACTUAL_DEDUP_HINT_LIMIT]
+    else:
+        hint_entities = []
     existing_dicts = [
         {"type": e.type, "name": e.name, "aliases": e.aliases or []}
-        for e in existing
+        for e in hint_entities
     ]
 
     prompt = build_factual_prompt(
@@ -110,19 +123,23 @@ async def run_factual_extraction(
     )
 
     try:
-        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or EXTRACTION_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": FACTUAL_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
-            temperature=EXTRACTION_TEMPERATURE,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": EXTRACTION_TEMPERATURE,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)
+        response = await acompletion(**call_kwargs)
 
         raw = response.choices[0].message.content
         data = parse_json_response(raw)

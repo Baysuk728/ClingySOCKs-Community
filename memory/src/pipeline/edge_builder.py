@@ -12,13 +12,13 @@ import json
 import re
 from typing import Optional
 
-import litellm
-
 from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE,
     GEMINI_API_KEY, OPENAI_API_KEY,
+    EDGE_MAX_ITEMS_PER_TYPE,
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.db.models import (
     Edge, Arc, ArcEvent, Relationship, FactualEntity,
 )
@@ -32,10 +32,22 @@ from src.memory_registry import (
 _RELATIONSHIP_TYPES = {"inside_joke", "intimate_moment"}
 
 
+def _recency_key(row) -> float:
+    """Sort key for capping items by recency. Falls back gracefully when a row
+    has no created_at/updated_at (treats it as oldest)."""
+    ts = getattr(row, "created_at", None) or getattr(row, "updated_at", None)
+    try:
+        return ts.timestamp() if ts else 0.0
+    except Exception:
+        return 0.0
+
+
 async def build_grounded_edges(
     entity_id: str,
     session,
     synthesis_arcs: list[dict] | None = None,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> dict:
     """
     Build grounded edges using real stored IDs from the database.
@@ -93,6 +105,17 @@ async def build_grounded_edges(
         print("   ℹ️ No items to create edges for")
         return {"edges_created": 0, "edges_updated": 0, "arcs_created": 0}
 
+    # Bound prompt growth: keep only the most-recent N items per type. Sending
+    # the entire accumulated memory on every conversation grows unboundedly;
+    # older items were already linked when first stored. valid_ids is derived
+    # from the same capped set, so the LLM only references items it can see.
+    if EDGE_MAX_ITEMS_PER_TYPE and EDGE_MAX_ITEMS_PER_TYPE > 0:
+        for k, rows in list(items_by_type.items()):
+            if len(rows) > EDGE_MAX_ITEMS_PER_TYPE:
+                items_by_type[k] = sorted(
+                    rows, key=_recency_key, reverse=True
+                )[:EDGE_MAX_ITEMS_PER_TYPE]
+
     # Build grounding context and valid ID set from registry
     grounding = _build_grounding_context(items_by_type)
     valid_ids = _build_id_lookup(items_by_type)
@@ -149,19 +172,23 @@ RULES:
     stats = {"edges_created": 0, "edges_updated": 0, "arcs_created": 0, "edges_rejected": 0}
 
     try:
-        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or EXTRACTION_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": "You create knowledge graph edges between stored memory items. Only use IDs that actually exist. Return ONLY valid JSON."},
                 {"role": "user", "content": prompt},
             ],
-            temperature=EXTRACTION_TEMPERATURE,
-            max_tokens=16384,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": EXTRACTION_TEMPERATURE,
+            "max_tokens": 16384,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)
+        response = await acompletion(**call_kwargs)
 
         raw = response.choices[0].message.content
         finish_reason = response.choices[0].finish_reason

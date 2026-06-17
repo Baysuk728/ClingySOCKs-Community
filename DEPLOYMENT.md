@@ -145,5 +145,41 @@ python scripts/setup_db.py --embed
 |--------|---------|
 | `scripts/setup_db.py --init` | Create all database tables |
 | `scripts/setup_db.py --embed` | Generate memory embeddings |
-| `scripts/run_harvest.py` | Run harvest pipeline manually |
+| `scripts/run_harvest.py` | Run harvest for ONE agent manually |
+| `scripts/run_harvest_all.py` | Run harvest for ALL agents with pending work (for scheduling) |
 | `scripts/backup_db.py` | Backup all tables to CSV + SQL |
+
+## Scheduled Harvesting (Railway Cron)
+
+Harvesting can run automatically on a schedule instead of being triggered by
+hand. The recommended way is a **separate cron service** in the same Railway
+project — a cron service starts on schedule, runs once, and exits, which is
+exactly what `scripts/run_harvest_all.py` does (it harvests every agent that has
+pending work, then exits). It is more reliable than the in-app background trigger
+because nothing recycles it out from under a long backfill, and per-agent
+checkpoints make it safe to re-run.
+
+**Set it up (Railway dashboard, ~2 minutes):**
+
+1. Open your project → **New** → **GitHub Repo** → pick this same repo. (Reusing
+   the repo means the cron service builds the same image as your API.)
+2. Open the new service → **Settings**:
+   - **Build**: same as the API — Dockerfile path `memory/Dockerfile`.
+   - **Deploy → Custom Start Command**:
+     `python scripts/run_harvest_all.py`
+   - **Deploy → Cron Schedule**: a 5-field UTC crontab expression, e.g.
+     `0 3 * * *` (daily at 03:00 UTC). Minimum frequency is every 5 minutes.
+3. **Variables**: give it the same `DATABASE_URL` and provider API key(s) as the
+   API service (e.g. `GEMINI_API_KEY` / `OPENAI_API_KEY`). The simplest path is
+   to use Railway **shared variables** so both services read the same values.
+4. Deploy. Railway runs the start command on the schedule; the script processes
+   all due agents and exits (non-zero only if an agent errored).
+
+> The cron service **must exit** when finished or Railway skips the next run —
+> `run_harvest_all.py` exits on its own, so no extra handling is needed.
+
+Cost tip: harvest already picks a cheap model automatically — it derives a
+balanced-cheap model from each persona's chat provider (e.g. an OpenAI persona
+harvests with `gpt-4o-mini`, not `gpt-4o`), so you don't need to configure
+anything. To trim further, set `ECHO_ENABLED=false` / `FACTUAL_ENABLED=false`.
+See `memory/.env.example` for all harvest cost knobs.

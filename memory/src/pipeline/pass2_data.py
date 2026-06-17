@@ -9,13 +9,12 @@ import json
 import re
 from typing import Optional
 
-import litellm
-
 from src.config import (
     EXTRACTION_MODEL, EXTRACTION_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.prompts.extraction import build_extraction_prompt, EXTRACTION_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ChunkResult
 from src.pipeline.chunker import ConversationChunk
@@ -28,11 +27,14 @@ async def run_extraction_pass(
     agent_name: str,
     user_name: str,
     existing_lexicon_terms: list[str] | None = None,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> ChunkResult:
     """
     Run Pass 2 (Data Extraction) on a single chunk.
 
     Takes the Pass 1 ChunkResult and adds Pass 2 fields to it.
+    `llm_overrides` carries BYOK/per-user litellm kwargs (api_key / model rewrite).
     """
     chunk_text = format_chunk_for_llm(chunk, agent_name)
 
@@ -52,19 +54,23 @@ async def run_extraction_pass(
     print(f"  📦 Pass 2 (Data) — Chunk {chunk_result.chunk_order + 1}...")
 
     try:
-        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or EXTRACTION_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": EXTRACTION_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
-            temperature=EXTRACTION_TEMPERATURE,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": EXTRACTION_TEMPERATURE,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)
+        response = await acompletion(**call_kwargs)
 
         raw_content = response.choices[0].message.content
         data = _parse_json_response(raw_content)

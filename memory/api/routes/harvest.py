@@ -22,55 +22,20 @@ async def trigger_harvest(
     Trigger a harvest for the given entity.
     Runs in background — returns immediately with status.
     """
-    from src.harvest import harvest_entity
+    import os
+    from fastapi import HTTPException
+
+    from src.harvest import harvest_entity, resolve_harvest_plan
     from src.db.session import get_session
     from src.db.models import Entity, UserProfile, Conversation
+    from src.model_registry import _PROVIDER_API_CONFIG, provider_from_model
 
     agent_name = "Agent"
     user_name = "User"
+    owner_user_id = None
 
-    # Validate required API keys for harvesting based on configured models
-    from src.config import NARRATIVE_MODEL, EXTRACTION_MODEL, SYNTHESIS_MODEL
-    import os
-    
-    # Stages and their models
-    stages = {
-        "Narrative Pass": NARRATIVE_MODEL,
-        "Extraction Pass": EXTRACTION_MODEL,
-        "Synthesis Pass": SYNTHESIS_MODEL
-    }
-    
-    from src.model_registry import _PROVIDER_API_CONFIG
-    
-    missing_configs = []
-    checked_env_keys = set()
-    
-    for stage_name, model_id in stages.items():
-        if not model_id: continue
-        
-        # Identify provider (e.g. 'gemini' from 'gemini/...')
-        provider = model_id.split('/')[0] if '/' in model_id else None
-        if not provider: continue
-        
-        # Local models don't need API keys
-        if provider in ["ollama_chat", "local"]:
-            continue
-            
-        config = _PROVIDER_API_CONFIG.get(provider)
-        if config:
-            env_key = config["env_key"]
-            if env_key not in checked_env_keys:
-                if not os.getenv(env_key):
-                    missing_configs.append(f"{provider.capitalize()} API Key ({env_key})")
-                checked_env_keys.add(env_key)
-
-    if missing_configs:
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Harvesting failed: The following configuration is missing from .env: {', '.join(missing_configs)}. Please configure your API keys and try again."
-        )
-
+    # Look up the entity (and its owner) up front — the owner is needed to check
+    # for a per-user BYOK key, and to resolve the agent/user display names.
     try:
         with get_session() as session:
             entity = session.get(Entity, entity_id)
@@ -78,32 +43,70 @@ async def trigger_harvest(
                 return ApiResponse(success=False, error=f"Entity '{entity_id}' not found")
 
             agent_name = entity.name or "Agent"
-            if entity.owner_user_id:
-                user = session.get(UserProfile, entity.owner_user_id)
+            owner_user_id = entity.owner_user_id
+            if owner_user_id:
+                user = session.get(UserProfile, owner_user_id)
                 if user and user.display_name:
                     user_name = user.display_name
 
-            # Guard against concurrent harvests, but allow manual overrides if requested
+            # Guard against concurrent harvests, but allow manual overrides if requested.
             already_running = (
                 session.query(Conversation)
                 .filter_by(entity_id=entity_id, harvest_status="processing")
                 .first()
             )
             if already_running and not req.dry_run:
-                # IMPORTANT: If the user is triggering manually, we'll assume they want to clear the stuck state
-                # but let's notify them or just clear it.
+                # Manual trigger → assume the user wants to clear a stuck run.
                 print(f"⚠️ Resetting stuck harvest status ('processing') for entity {entity_id}")
                 session.query(Conversation).filter_by(
-                    entity_id=entity_id, 
+                    entity_id=entity_id,
                     harvest_status="processing"
                 ).update({"harvest_status": "pending"})
                 session.commit()
-    except HTTPException:
-        raise
     except Exception as e:
         print(f"⚠️ Warning: Could not look up entity for harvest: {e}")
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail="Failed to validate entity state")
+
+    # Resolve the SAME plan the harvest will use (cheap models derived from the
+    # persona's chat provider, reusing the chat key) and validate each model has
+    # a usable key before kicking off the background job.
+    plan = await resolve_harvest_plan(entity_id, owner_user_id)
+    models = {plan["narrative"], plan["extraction"], plan["synthesis"]}
+
+    missing_models = []
+    for model_id in models:
+        provider = provider_from_model(model_id)
+        if provider == "local":
+            continue  # local models need no API key
+
+        # 1) Key already resolved from the persona/BYOK (same provider as chat)?
+        if plan.get("api_key") and provider == plan.get("chat_provider"):
+            continue
+        # 2) Server-level env key for this provider?
+        config = _PROVIDER_API_CONFIG.get(provider) if provider else None
+        if config and os.getenv(config["env_key"]):
+            continue
+        # 3) Owner's BYOK key (vault resolver also covers OpenRouter + env fallback)?
+        if owner_user_id:
+            try:
+                from src.integrations.vault_factory import get_vault
+                resolved = await get_vault().resolve_for_litellm(owner_user_id, model_id)
+                if resolved.get("api_key"):
+                    continue
+            except Exception:
+                pass
+        missing_models.append(model_id)
+
+    if missing_models:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Harvesting can't start: no API key found for "
+                f"{', '.join(sorted(set(missing_models)))}. Add a key for your "
+                "persona's provider in Settings → API Keys (BYOK), or set it in the "
+                "server environment, then retry."
+            ),
+        )
 
     async def _run():
         await harvest_entity(

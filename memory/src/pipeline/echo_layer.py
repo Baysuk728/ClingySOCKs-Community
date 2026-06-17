@@ -8,13 +8,13 @@ that represent the agent's internal processing during that time.
 import json
 import re
 from datetime import timedelta
-import litellm
 
 from src.config import (
     TIME_GAP_HOURS, NARRATIVE_MODEL, NARRATIVE_TEMPERATURE,
     GEMINI_API_KEY, OPENAI_API_KEY
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.pipeline.chunker import ConversationChunk
 from src.prompts.echo import build_echo_prompt, ECHO_SYSTEM_INSTRUCTION
 
@@ -23,6 +23,8 @@ async def run_echo_pass(
     rolling_context: str,
     agent_name: str,
     user_name: str,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> list[dict]:
     """
     Scan chunk for time gaps and generate dreams.
@@ -101,19 +103,23 @@ async def _generate_dream(
     # LiteLLM automatically uses os.environ["GEMINI_API_KEY"] and ["OPENAI_API_KEY"]
         
     try:
-        _resolved = resolve_for_litellm(NARRATIVE_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or NARRATIVE_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": ECHO_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.7, # Higher temp for dreaming
-            max_tokens=1024,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(NARRATIVE_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": 0.7,  # Higher temp for dreaming
+            "max_tokens": 1024,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)
+        response = await acompletion(**call_kwargs)
         
         content = response.choices[0].message.content
         return _parse_json(content)

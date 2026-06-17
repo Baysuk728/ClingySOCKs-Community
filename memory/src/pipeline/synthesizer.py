@@ -9,13 +9,12 @@ items, and detects narrative arcs.
 import json
 import re
 
-import litellm
-
 from src.config import (
     SYNTHESIS_MODEL, NARRATIVE_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.prompts.synthesis import build_synthesis_prompt, SYNTHESIS_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ContextWindow
 
@@ -25,6 +24,8 @@ async def run_synthesis(
     existing_narratives: dict[str, str],
     agent_name: str,
     user_name: str,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> dict:
     """
     Run post-merge synthesis on all chunk results.
@@ -77,19 +78,23 @@ async def run_synthesis(
     # LiteLLM automatically uses os.environ["GEMINI_API_KEY"] and ["OPENAI_API_KEY"]
 
     try:
-        _resolved = resolve_for_litellm(SYNTHESIS_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or SYNTHESIS_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": SYNTHESIS_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
-            temperature=NARRATIVE_TEMPERATURE,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(SYNTHESIS_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": NARRATIVE_TEMPERATURE,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)
+        response = await acompletion(**call_kwargs)
 
         raw_content = response.choices[0].message.content
         data = _parse_json_response(raw_content)

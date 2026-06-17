@@ -9,13 +9,12 @@ import json
 import re
 from typing import Optional
 
-import litellm
-
 from src.config import (
     NARRATIVE_MODEL, NARRATIVE_TEMPERATURE, MAX_OUTPUT_TOKENS,
     GEMINI_API_KEY, OPENAI_API_KEY,
 )
 from src.model_registry import resolve_for_litellm, get_llm_timeout
+from src.pipeline.llm_client import acompletion
 from src.prompts.narrative import build_narrative_prompt, NARRATIVE_SYSTEM_INSTRUCTION
 from src.pipeline.context_window import ChunkResult
 from src.pipeline.chunker import ConversationChunk
@@ -38,9 +37,15 @@ async def run_narrative_pass(
     rolling_context: str = "",
     existing_memory_brief: str = "",
     chunk_order: int = 0,
+    model: str | None = None,
+    llm_overrides: dict | None = None,
 ) -> ChunkResult:
     """
     Run Pass 1 (Narrative Extraction) on a single chunk.
+
+    `llm_overrides` carries BYOK/per-user litellm kwargs (e.g. api_key, or a
+    model rewrite for OpenRouter fallback) resolved from the entity owner's
+    vault. Empty/None = rely on environment-level provider keys.
 
     Returns a ChunkResult with Pass 1 fields populated.
     """
@@ -59,19 +64,23 @@ async def run_narrative_pass(
     print(f"  🧠 Pass 1 (Narrative) — Chunk {chunk_order + 1} ({chunk.char_count / 1000:.1f}K chars)...")
 
     try:
-        _resolved = resolve_for_litellm(NARRATIVE_MODEL)
-        response = await litellm.acompletion(
-            model=_resolved["model"],
-            messages=[
+        _model = model or NARRATIVE_MODEL
+        _resolved = resolve_for_litellm(_model)
+        call_kwargs = {
+            "model": _resolved["model"],
+            "messages": [
                 {"role": "system", "content": NARRATIVE_SYSTEM_INSTRUCTION},
                 {"role": "user", "content": prompt},
             ],
-            temperature=NARRATIVE_TEMPERATURE,
-            max_tokens=MAX_OUTPUT_TOKENS,
-            response_format={"type": "json_object"},
-            timeout=get_llm_timeout(NARRATIVE_MODEL, _resolved.get("api_base")),
-            **{k: v for k, v in _resolved.items() if k not in ("model",)},
-        )
+            "temperature": NARRATIVE_TEMPERATURE,
+            "max_tokens": MAX_OUTPUT_TOKENS,
+            "response_format": {"type": "json_object"},
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
+        }
+        call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
+        if llm_overrides:
+            call_kwargs.update(llm_overrides)  # BYOK key / model rewrite wins
+        response = await acompletion(**call_kwargs)
 
         raw_content = response.choices[0].message.content
         data = _parse_json_response(raw_content)
