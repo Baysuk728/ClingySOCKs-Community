@@ -497,6 +497,49 @@ def get_default_model(provider: str = "gemini") -> str:
     return "gemini/gemini-2.5-flash"
 
 
+# ── Harvest (background pipeline) model selection ─────
+# Harvest is structured extraction/summarization — it does NOT need the flagship
+# chat model. Each provider maps to a "balanced cheap" model: meaningfully
+# cheaper than the flagship while still strong enough for reliable extraction.
+# Harvest derives its model from the persona's chat PROVIDER, so it reuses the
+# key the user already has and stays cheap by default (no configuration needed).
+_HARVEST_MODELS: dict[str, str] = {
+    "gemini": "gemini/gemini-2.5-flash",
+    "openai": "openai/gpt-4o-mini",
+    "claude": "anthropic/claude-haiku-4-5-20250414",
+    "grok": "xai/grok-2-1212",
+    "openrouter": "openrouter/openai/gpt-4o-mini",
+}
+
+# Map a LiteLLM model prefix to our internal provider key.
+_PREFIX_TO_PROVIDER: dict[str, str] = {
+    "gemini": "gemini",
+    "openai": "openai",
+    "anthropic": "claude",
+    "xai": "grok",
+    "openrouter": "openrouter",
+    "ollama_chat": "local",
+    "ollama": "local",
+    "local": "local",
+}
+
+
+def provider_from_model(model: str | None) -> str | None:
+    """Return the internal provider key for a model id (by its prefix)."""
+    if not model:
+        return None
+    prefix = model.split("/", 1)[0]
+    return _PREFIX_TO_PROVIDER.get(prefix)
+
+
+def get_harvest_model(provider: str | None) -> str:
+    """Cheap-but-capable harvest model for a provider. Falls back to that
+    provider's default chat model, then to the global default."""
+    if provider and provider in _HARVEST_MODELS:
+        return _HARVEST_MODELS[provider]
+    return get_default_model(provider or "gemini")
+
+
 def get_provider_names() -> dict[str, str]:
     """Return provider key → display name mapping."""
     return dict(PROVIDER_NAMES)

@@ -65,6 +65,7 @@ async def run_factual_extraction(
     user_name: str,
     narrative_context: str = "",
     source_message_id: str | None = None,
+    model: str | None = None,
     llm_overrides: dict | None = None,
 ) -> dict:
     """
@@ -122,7 +123,8 @@ async def run_factual_extraction(
     )
 
     try:
-        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
+        _model = model or EXTRACTION_MODEL
+        _resolved = resolve_for_litellm(_model)
         call_kwargs = {
             "model": _resolved["model"],
             "messages": [
@@ -132,7 +134,7 @@ async def run_factual_extraction(
             "temperature": EXTRACTION_TEMPERATURE,
             "max_tokens": MAX_OUTPUT_TOKENS,
             "response_format": {"type": "json_object"},
-            "timeout": get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
         }
         call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
         if llm_overrides:

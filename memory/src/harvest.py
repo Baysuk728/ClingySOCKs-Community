@@ -12,6 +12,7 @@ Ties together the full pipeline:
 """
 
 import asyncio
+import os
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Optional
@@ -111,32 +112,66 @@ def _preflight_db_check() -> tuple[bool, str]:
         return False, f"{hint}\n   Detail: {str(exc)[:300]}"
 
 
-async def _resolve_llm_overrides(owner_user_id: str | None) -> dict[str, dict]:
-    """Resolve per-model BYOK litellm kwargs (api_key, and possibly a model
-    rewrite for OpenRouter fallback) for the entity owner, via the same vault
-    the chat path uses. Returns {model_id: overrides_dict}.
+async def resolve_harvest_plan(entity_id: str, owner_user_id: str | None) -> dict:
+    """Decide which models + key the harvest will use for this entity.
 
-    Empty when there's no owner or no resolvable key — in that case the pipeline
-    falls back to environment-level provider keys (legacy behavior).
+    Harvest is structured extraction — it doesn't need the flagship chat model.
+    So we derive a CHEAP harvest model from the persona's chat PROVIDER and reuse
+    the key chat already resolved (BYOK vault or server env). This means:
+      • zero configuration — the user only ever picks a chat model;
+      • cheap by default — gpt-4o → gpt-4o-mini, etc.;
+      • fail-proof — if chat works, harvest works (same provider, same key).
+
+    Explicit NARRATIVE_MODEL / EXTRACTION_MODEL / SYNTHESIS_MODEL env vars still
+    win, for power users who want to pin a model. Local chat models reuse
+    themselves (free, key-less).
+
+    Returns {"narrative","extraction","synthesis","api_key","chat_provider"}.
     """
-    overrides: dict[str, dict] = {}
-    if not owner_user_id:
-        return overrides
+    from src.model_registry import provider_from_model, get_harvest_model, is_local_model
+
+    chat_model = None
+    api_key = None
     try:
-        from src.integrations.vault_factory import get_vault
-        vault = get_vault()
+        from src.persona_config import aload_persona_config
+        cfg = await aload_persona_config(entity_id, user_id=owner_user_id)
+        chat_model = cfg.model
+        api_key = cfg.api_key  # BYOK key if resolved from vault; else None (env)
     except Exception as e:
-        console.print(f"   ⚠️ Vault unavailable for BYOK resolution: {str(e)[:120]}")
-        return overrides
-    for model_id in {NARRATIVE_MODEL, EXTRACTION_MODEL, SYNTHESIS_MODEL}:
-        try:
-            overrides[model_id] = await vault.resolve_for_litellm(owner_user_id, model_id) or {}
-        except Exception as e:
-            # No key for this provider in the owner's vault and no env fallback —
-            # leave empty; the pass will rely on env auto-pickup (may still work).
-            console.print(f"   ⚠️ BYOK key resolution failed for {model_id}: {str(e)[:120]}")
-            overrides[model_id] = {}
-    return overrides
+        console.print(f"   ⚠️ Could not load persona config ({str(e)[:120]}); using global harvest defaults")
+
+    if chat_model and is_local_model(chat_model):
+        # Local chat → reuse the same local model for harvest (free, no key).
+        chat_provider = "local"
+        auto = chat_model
+    elif chat_model:
+        chat_provider = provider_from_model(chat_model) or "gemini"
+        auto = get_harvest_model(chat_provider)
+    else:
+        # No persona model resolvable — fall back to the global config default.
+        chat_provider = provider_from_model(NARRATIVE_MODEL)
+        auto = NARRATIVE_MODEL
+
+    plan = {
+        "narrative": os.getenv("NARRATIVE_MODEL") or auto,
+        "extraction": os.getenv("EXTRACTION_MODEL") or auto,
+        "synthesis": os.getenv("SYNTHESIS_MODEL") or auto,
+        "api_key": api_key,
+        "chat_provider": chat_provider,
+    }
+    return plan
+
+
+def _harvest_overrides(model_id: str, plan: dict) -> dict | None:
+    """Per-pass litellm overrides. Inject the resolved chat key only when the
+    harvest model is the SAME provider as chat (the default case). For a power
+    user who pinned a different-provider model via env, fall back to env/vault
+    auto-pickup instead of sending a mismatched key.
+    """
+    from src.model_registry import provider_from_model
+    if plan.get("api_key") and provider_from_model(model_id) == plan.get("chat_provider"):
+        return {"api_key": plan["api_key"]}
+    return None
 
 
 def _update_harvest_progress(
@@ -324,13 +359,7 @@ async def harvest_entity(
     """
     console.print(f"\n{'='*60}")
     console.print(f"🌾 [bold]Harvest[/bold] — {agent_name} ({entity_id})")
-    console.print(f"{'='*60}")
-    # Surface the resolved models so it's obvious which provider/route is in use
-    # (e.g. gemini/* = direct Gemini API, openrouter/* = via OpenRouter).
-    console.print(
-        f"   Models — narrative: [cyan]{NARRATIVE_MODEL}[/cyan] | "
-        f"data: [cyan]{EXTRACTION_MODEL}[/cyan] | synthesis: [cyan]{SYNTHESIS_MODEL}[/cyan]\n"
-    )
+    console.print(f"{'='*60}\n")
 
     stats = {
         "conversations_processed": 0,
@@ -392,13 +421,20 @@ async def harvest_entity(
         # Cache minimal data needed for the loop
         conversations_metadata = [{"id": c.id, "title": c.title, "message_count": c.message_count or 0} for c in convs]
 
-    # Resolve the owner's BYOK keys once (per model) so harvest can run on the
-    # user's own provider key — not just server env keys. Empty = env fallback.
-    byok_overrides = await _resolve_llm_overrides(owner_user_id)
-    _narr_ov = byok_overrides.get(NARRATIVE_MODEL) or None
-    _extr_ov = byok_overrides.get(EXTRACTION_MODEL) or None
-    _synth_ov = byok_overrides.get(SYNTHESIS_MODEL) or None
+    # Decide which (cheap) models + key this harvest uses, derived from the
+    # persona's chat provider. Reuses the working chat key; cheap by default.
+    plan = await resolve_harvest_plan(entity_id, owner_user_id)
+    _narr_model, _extr_model, _synth_model = plan["narrative"], plan["extraction"], plan["synthesis"]
+    _narr_ov = _harvest_overrides(_narr_model, plan)
+    _extr_ov = _harvest_overrides(_extr_model, plan)
+    _synth_ov = _harvest_overrides(_synth_model, plan)
 
+    # Surface the resolved models so it's obvious which provider/route is in use.
+    console.print(
+        f"   Models — narrative: [cyan]{_narr_model}[/cyan] | "
+        f"data: [cyan]{_extr_model}[/cyan] | synthesis: [cyan]{_synth_model}[/cyan]"
+        f"{'  [dim](BYOK key)[/dim]' if plan.get('api_key') else ''}"
+    )
     console.print(f"📋 Found {len(conversations_metadata)} conversations to process\n")
     
     # Total estimate (chunks)
@@ -461,6 +497,7 @@ async def harvest_entity(
                                     user_name=user_name,
                                     narrative_context=narrative_ctx,
                                     source_message_id=first_msg_id,
+                                    model=_extr_model,
                                     llm_overrides=_extr_ov,
                                 )
                                 stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
@@ -525,6 +562,7 @@ async def harvest_entity(
                         rolling_context=context_window.current_context,
                         existing_memory_brief=existing_memory,
                         chunk_order=chunk.chunk_order,
+                        model=_narr_model,
                         llm_overrides=_narr_ov,
                     )
                     stats["pass1_calls"] += 1
@@ -536,6 +574,7 @@ async def harvest_entity(
                         agent_name=agent_name,
                         user_name=user_name,
                         existing_lexicon_terms=context_window.get_known_lexicon_terms(),
+                        model=_extr_model,
                         llm_overrides=_extr_ov,
                     )
                     stats["pass2_calls"] += 1
@@ -548,6 +587,7 @@ async def harvest_entity(
                             rolling_context=result.rolling_summary,
                             agent_name=agent_name,
                             user_name=user_name,
+                            model=_narr_model,
                             llm_overrides=_narr_ov,
                         )
                         result.echo_dreams = dreams
@@ -589,6 +629,7 @@ async def harvest_entity(
                             user_name=user_name,
                             narrative_context=narrative_ctx,
                             source_message_id=first_msg_id,
+                            model=_extr_model,
                             llm_overrides=_extr_ov,
                         )
                         stats["factual_entities_created"] += factual_stats.get("entities_created", 0)
@@ -620,6 +661,7 @@ async def harvest_entity(
                     existing_narratives=existing_narratives,
                     agent_name=agent_name,
                     user_name=user_name,
+                    model=_synth_model,
                     llm_overrides=_synth_ov,
                 )
                 stats["synthesis_calls"] += 1
@@ -636,6 +678,7 @@ async def harvest_entity(
                         entity_id=entity_id,
                         session=session,
                         synthesis_arcs=synthesis_result.get("detected_arcs", []),
+                        model=_extr_model,
                         llm_overrides=_extr_ov,
                     )
                     stats["edges_created"] += edge_stats.get("edges_created", 0)
@@ -671,7 +714,7 @@ async def harvest_entity(
                         messages_from=messages[0].message_index if messages else 0,
                         messages_to=messages[-1].message_index if messages else 0,
                         message_count=len(messages),
-                        llm_used=NARRATIVE_MODEL,
+                        llm_used=_narr_model,
                         items_extracted=stored,
                         success=True,
                     )

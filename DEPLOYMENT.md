@@ -178,7 +178,8 @@ checkpoints make it safe to re-run.
 > The cron service **must exit** when finished or Railway skips the next run —
 > `run_harvest_all.py` exits on its own, so no extra handling is needed.
 
-Cost tip: scheduled runs bill an LLM call per pass per chunk. Pick a cheap
-harvest model (e.g. `NARRATIVE_MODEL=openai/gpt-4o-mini` or a Gemini Flash/
-Flash-Lite model) and optionally set `ECHO_ENABLED=false` / `FACTUAL_ENABLED=false`
-to trim calls. See `memory/.env.example` for all harvest cost knobs.
+Cost tip: harvest already picks a cheap model automatically — it derives a
+balanced-cheap model from each persona's chat provider (e.g. an OpenAI persona
+harvests with `gpt-4o-mini`, not `gpt-4o`), so you don't need to configure
+anything. To trim further, set `ECHO_ENABLED=false` / `FACTUAL_ENABLED=false`.
+See `memory/.env.example` for all harvest cost knobs.

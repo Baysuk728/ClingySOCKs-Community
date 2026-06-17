@@ -37,6 +37,7 @@ async def run_narrative_pass(
     rolling_context: str = "",
     existing_memory_brief: str = "",
     chunk_order: int = 0,
+    model: str | None = None,
     llm_overrides: dict | None = None,
 ) -> ChunkResult:
     """
@@ -63,7 +64,8 @@ async def run_narrative_pass(
     print(f"  🧠 Pass 1 (Narrative) — Chunk {chunk_order + 1} ({chunk.char_count / 1000:.1f}K chars)...")
 
     try:
-        _resolved = resolve_for_litellm(NARRATIVE_MODEL)
+        _model = model or NARRATIVE_MODEL
+        _resolved = resolve_for_litellm(_model)
         call_kwargs = {
             "model": _resolved["model"],
             "messages": [
@@ -73,7 +75,7 @@ async def run_narrative_pass(
             "temperature": NARRATIVE_TEMPERATURE,
             "max_tokens": MAX_OUTPUT_TOKENS,
             "response_format": {"type": "json_object"},
-            "timeout": get_llm_timeout(NARRATIVE_MODEL, _resolved.get("api_base")),
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
         }
         call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
         if llm_overrides:

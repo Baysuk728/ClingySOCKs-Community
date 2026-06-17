@@ -25,11 +25,10 @@ async def trigger_harvest(
     import os
     from fastapi import HTTPException
 
-    from src.harvest import harvest_entity
+    from src.harvest import harvest_entity, resolve_harvest_plan
     from src.db.session import get_session
     from src.db.models import Entity, UserProfile, Conversation
-    from src.config import NARRATIVE_MODEL, EXTRACTION_MODEL, SYNTHESIS_MODEL
-    from src.model_registry import _PROVIDER_API_CONFIG
+    from src.model_registry import _PROVIDER_API_CONFIG, provider_from_model
 
     agent_name = "Agent"
     user_name = "User"
@@ -68,30 +67,26 @@ async def trigger_harvest(
         print(f"⚠️ Warning: Could not look up entity for harvest: {e}")
         raise HTTPException(status_code=500, detail="Failed to validate entity state")
 
-    # Validate that each harvest stage has a usable key — either a server env
-    # key OR the owner's BYOK key in the vault (the harvest pipeline now resolves
-    # the owner's key the same way the chat path does).
-    stages = {
-        "Narrative Pass": NARRATIVE_MODEL,
-        "Extraction Pass": EXTRACTION_MODEL,
-        "Synthesis Pass": SYNTHESIS_MODEL,
-    }
-    missing_models = []
-    checked_models = set()
-    for stage_name, model_id in stages.items():
-        if not model_id or model_id in checked_models:
-            continue
-        checked_models.add(model_id)
+    # Resolve the SAME plan the harvest will use (cheap models derived from the
+    # persona's chat provider, reusing the chat key) and validate each model has
+    # a usable key before kicking off the background job.
+    plan = await resolve_harvest_plan(entity_id, owner_user_id)
+    models = {plan["narrative"], plan["extraction"], plan["synthesis"]}
 
-        provider = model_id.split('/')[0] if '/' in model_id else None
-        if provider in ("ollama_chat", "local"):
+    missing_models = []
+    for model_id in models:
+        provider = provider_from_model(model_id)
+        if provider == "local":
             continue  # local models need no API key
 
-        # 1) Server-level env key for this provider?
+        # 1) Key already resolved from the persona/BYOK (same provider as chat)?
+        if plan.get("api_key") and provider == plan.get("chat_provider"):
+            continue
+        # 2) Server-level env key for this provider?
         config = _PROVIDER_API_CONFIG.get(provider) if provider else None
         if config and os.getenv(config["env_key"]):
             continue
-        # 2) Owner's BYOK key (the vault resolver also covers OpenRouter + env fallback)?
+        # 3) Owner's BYOK key (vault resolver also covers OpenRouter + env fallback)?
         if owner_user_id:
             try:
                 from src.integrations.vault_factory import get_vault
@@ -107,8 +102,9 @@ async def trigger_harvest(
             status_code=400,
             detail=(
                 "Harvesting can't start: no API key found for "
-                f"{', '.join(sorted(set(missing_models)))}. Add the matching key in "
-                "Settings → API Keys (BYOK), or set it in the server environment, then retry."
+                f"{', '.join(sorted(set(missing_models)))}. Add a key for your "
+                "persona's provider in Settings → API Keys (BYOK), or set it in the "
+                "server environment, then retry."
             ),
         )
 

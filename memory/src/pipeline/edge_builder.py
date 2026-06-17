@@ -46,6 +46,7 @@ async def build_grounded_edges(
     entity_id: str,
     session,
     synthesis_arcs: list[dict] | None = None,
+    model: str | None = None,
     llm_overrides: dict | None = None,
 ) -> dict:
     """
@@ -171,7 +172,8 @@ RULES:
     stats = {"edges_created": 0, "edges_updated": 0, "arcs_created": 0, "edges_rejected": 0}
 
     try:
-        _resolved = resolve_for_litellm(EXTRACTION_MODEL)
+        _model = model or EXTRACTION_MODEL
+        _resolved = resolve_for_litellm(_model)
         call_kwargs = {
             "model": _resolved["model"],
             "messages": [
@@ -181,7 +183,7 @@ RULES:
             "temperature": EXTRACTION_TEMPERATURE,
             "max_tokens": 16384,
             "response_format": {"type": "json_object"},
-            "timeout": get_llm_timeout(EXTRACTION_MODEL, _resolved.get("api_base")),
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
         }
         call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
         if llm_overrides:

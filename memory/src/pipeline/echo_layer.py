@@ -23,6 +23,7 @@ async def run_echo_pass(
     rolling_context: str,
     agent_name: str,
     user_name: str,
+    model: str | None = None,
     llm_overrides: dict | None = None,
 ) -> list[dict]:
     """
@@ -102,7 +103,8 @@ async def _generate_dream(
     # LiteLLM automatically uses os.environ["GEMINI_API_KEY"] and ["OPENAI_API_KEY"]
         
     try:
-        _resolved = resolve_for_litellm(NARRATIVE_MODEL)
+        _model = model or NARRATIVE_MODEL
+        _resolved = resolve_for_litellm(_model)
         call_kwargs = {
             "model": _resolved["model"],
             "messages": [
@@ -112,7 +114,7 @@ async def _generate_dream(
             "temperature": 0.7,  # Higher temp for dreaming
             "max_tokens": 1024,
             "response_format": {"type": "json_object"},
-            "timeout": get_llm_timeout(NARRATIVE_MODEL, _resolved.get("api_base")),
+            "timeout": get_llm_timeout(_model, _resolved.get("api_base")),
         }
         call_kwargs.update({k: v for k, v in _resolved.items() if k != "model"})
         if llm_overrides:
